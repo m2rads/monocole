@@ -218,7 +218,43 @@ async fn run_chat_stream(
     messages: Vec<ChatMessage>,
 ) -> Result<(), String> {
     let port = ensure_running(app, state).await?;
+    stream_completion(port, &messages, |event| match event {
+        StreamEvent::Token(token) => emit(app, session_id, "token", Some(token), None),
+        StreamEvent::Done => emit(app, session_id, "done", None, None),
+    })
+    .await
+}
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum StreamEvent {
+    Token(String),
+    Done,
+}
+
+/// Parses one SSE line from llama-server's OpenAI-compatible stream.
+/// Returns None for keep-alives, empty deltas, and unparseable lines.
+fn parse_sse_line(line: &str) -> Option<StreamEvent> {
+    let data = line.trim().strip_prefix("data: ")?;
+    if data == "[DONE]" {
+        return Some(StreamEvent::Done);
+    }
+    let value = serde_json::from_str::<serde_json::Value>(data).ok()?;
+    let token = value["choices"][0]["delta"]["content"].as_str()?;
+    if token.is_empty() {
+        None
+    } else {
+        Some(StreamEvent::Token(token.to_string()))
+    }
+}
+
+/// Streams a chat completion from a llama-server on `port`, invoking
+/// `on_event` per token and once for Done. Separated from the sidecar
+/// lifecycle so it can be exercised against any HTTP server in tests.
+pub async fn stream_completion(
+    port: u16,
+    messages: &[ChatMessage],
+    mut on_event: impl FnMut(StreamEvent),
+) -> Result<(), String> {
     let response = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
         .json(&json!({ "messages": messages, "stream": true }))
@@ -240,26 +276,20 @@ async fn run_chat_stream(
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
         while let Some(newline) = buffer.find('\n') {
-            let line = buffer[..newline].trim().to_string();
+            let line = buffer[..newline].to_string();
             buffer.drain(..=newline);
-            let Some(data) = line.strip_prefix("data: ") else {
-                continue;
-            };
-            if data == "[DONE]" {
-                emit(app, session_id, "done", None, None);
-                return Ok(());
-            }
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
-                if let Some(token) = value["choices"][0]["delta"]["content"].as_str() {
-                    if !token.is_empty() {
-                        emit(app, session_id, "token", Some(token.to_string()), None);
-                    }
+            match parse_sse_line(&line) {
+                Some(StreamEvent::Done) => {
+                    on_event(StreamEvent::Done);
+                    return Ok(());
                 }
+                Some(event) => on_event(event),
+                None => {}
             }
         }
     }
 
-    emit(app, session_id, "done", None, None);
+    on_event(StreamEvent::Done);
     Ok(())
 }
 
@@ -272,7 +302,12 @@ pub async fn generate_session_title(
     messages: Vec<ChatMessage>,
 ) -> Result<String, String> {
     let port = ensure_running(&app, &state).await?;
+    request_title(port, messages).await
+}
 
+/// One-shot, non-streaming completion against a llama-server on `port`.
+/// Separated from the sidecar lifecycle for testability.
+pub async fn request_title(port: u16, messages: Vec<ChatMessage>) -> Result<String, String> {
     let mut prompt_messages = vec![ChatMessage {
         role: "system".into(),
         content: "You name conversations. Reply with a title for the conversation, \
@@ -326,4 +361,68 @@ fn clean_title(raw: &str) -> String {
         title = "New Session".into();
     }
     title
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_port_returns_bindable_port() {
+        let port = free_port().unwrap();
+        assert_ne!(port, 0);
+        // The port was released when the probe listener dropped, so binding
+        // it again must work.
+        std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    }
+
+    #[test]
+    fn parse_sse_token_lines() {
+        assert_eq!(
+            parse_sse_line(r#"data: {"choices":[{"delta":{"content":"Hi"}}]}"#),
+            Some(StreamEvent::Token("Hi".into()))
+        );
+        assert_eq!(parse_sse_line("data: [DONE]"), Some(StreamEvent::Done));
+    }
+
+    #[test]
+    fn parse_sse_ignores_noise() {
+        assert_eq!(parse_sse_line(""), None);
+        assert_eq!(parse_sse_line(": keep-alive"), None);
+        assert_eq!(parse_sse_line("event: ping"), None);
+        assert_eq!(parse_sse_line("data: not-json"), None);
+        // Empty delta (role-only chunk) produces no token.
+        assert_eq!(
+            parse_sse_line(r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#),
+            None
+        );
+        assert_eq!(
+            parse_sse_line(r#"data: {"choices":[{"delta":{"content":""}}]}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn clean_title_strips_quotes_and_punctuation() {
+        assert_eq!(clean_title(r#""Local Llama Setup.""#), "Local Llama Setup");
+        assert_eq!(clean_title("  Chatting   about\nrust!  "), "Chatting about rust");
+        assert_eq!(clean_title("“Fancy Quotes”"), "Fancy Quotes");
+    }
+
+    #[test]
+    fn clean_title_strips_reasoning_block() {
+        assert_eq!(
+            clean_title("<think>the user wants a name</think>\nBLE Firmware Plan"),
+            "BLE Firmware Plan"
+        );
+    }
+
+    #[test]
+    fn clean_title_truncates_and_defaults() {
+        let long = "word ".repeat(40);
+        assert!(clean_title(&long).chars().count() <= 60);
+        assert_eq!(clean_title(""), "New Session");
+        assert_eq!(clean_title("<think>only thoughts</think>"), "New Session");
+        assert_eq!(clean_title("\"\""), "New Session");
+    }
 }

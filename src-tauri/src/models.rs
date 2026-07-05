@@ -33,7 +33,7 @@ struct DownloadEvent {
     error: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalModel {
     pub file: String,
@@ -59,7 +59,7 @@ fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Model files are always addressed by bare file name inside models_dir.
-fn validate_file_name(file: &str) -> Result<(), String> {
+pub(crate) fn validate_file_name(file: &str) -> Result<(), String> {
     if file.is_empty()
         || file.starts_with('.')
         || file.contains('/')
@@ -115,10 +115,15 @@ pub fn active_model_path(app: &AppHandle) -> Result<Option<PathBuf>, String> {
 
 #[tauri::command]
 pub fn list_local_models(app: AppHandle) -> Result<Vec<LocalModel>, String> {
-    let dir = models_dir(&app)?;
+    scan_models_dir(&models_dir(&app)?)
+}
+
+/// Lists final (.gguf) and resumable partial (.gguf.part) model files.
+/// A final file always wins over a partial with the same name.
+pub fn scan_models_dir(dir: &std::path::Path) -> Result<Vec<LocalModel>, String> {
     let mut by_file: HashMap<String, LocalModel> = HashMap::new();
 
-    for entry in std::fs::read_dir(&dir).map_err(|err| err.to_string())? {
+    for entry in std::fs::read_dir(dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let meta = entry.metadata().map_err(|err| err.to_string())?;
         if !meta.is_file() {
@@ -257,7 +262,10 @@ pub async fn download_model(
         active.insert(id.clone(), cancel.clone());
     }
 
-    let outcome = run_download(&app, &id, &entry, &final_path, &cancel).await;
+    let outcome = run_download(&entry, &final_path, &cancel, |downloaded, total| {
+        emit(&app, &id, "downloading", downloaded, total, None);
+    })
+    .await;
     state.0.lock().unwrap().remove(&id);
 
     match outcome {
@@ -276,17 +284,20 @@ pub async fn download_model(
     }
 }
 
-enum Outcome {
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
     Completed { total: u64 },
     Cancelled { downloaded: u64, total: u64 },
 }
 
-async fn run_download(
-    app: &AppHandle,
-    id: &str,
+/// Streams `entry.url` to `final_path` via a resumable `.part` file.
+/// `on_progress(downloaded, total)` fires at start and every few MB; the
+/// caller decides how to surface it (the app emits Tauri events).
+pub async fn run_download(
     entry: &ModelEntry,
     final_path: &std::path::Path,
     cancel: &AtomicBool,
+    mut on_progress: impl FnMut(u64, u64),
 ) -> Result<Outcome, String> {
     let part_path = final_path.with_file_name(format!("{}.part", entry.file));
     let existing = tokio::fs::metadata(&part_path)
@@ -327,7 +338,7 @@ async fn run_download(
     }
     .map_err(|err| err.to_string())?;
 
-    emit(app, id, "downloading", downloaded, total, None);
+    on_progress(downloaded, total);
     let mut last_emitted = downloaded;
     let mut stream = response.bytes_stream();
 
@@ -341,7 +352,7 @@ async fn run_download(
         file.write_all(&chunk).await.map_err(|err| err.to_string())?;
         downloaded += chunk.len() as u64;
         if downloaded - last_emitted >= PROGRESS_EMIT_STEP {
-            emit(app, id, "downloading", downloaded, total, None);
+            on_progress(downloaded, total);
             last_emitted = downloaded;
         }
     }
@@ -355,4 +366,88 @@ async fn run_download(
         .await
         .map_err(|err| err.to_string())?;
     Ok(Outcome::Completed { total: downloaded })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_file_names_pass() {
+        assert!(validate_file_name("model.gguf").is_ok());
+        assert!(validate_file_name("Llama-3.2-3B-Instruct-Q4_K_M.gguf").is_ok());
+    }
+
+    #[test]
+    fn invalid_file_names_fail() {
+        for name in [
+            "",
+            "model.bin",
+            "model.gguf.part",
+            ".hidden.gguf",
+            "../escape.gguf",
+            "dir/model.gguf",
+            "dir\\model.gguf",
+        ] {
+            assert!(validate_file_name(name).is_err(), "should reject {name:?}");
+        }
+    }
+
+    #[test]
+    fn settings_parse_defaults_and_roundtrip() {
+        let empty: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(empty.active_model_file.is_none());
+
+        let settings = AppSettings {
+            active_model_file: Some("model.gguf".into()),
+        };
+        let raw = serde_json::to_string(&settings).unwrap();
+        let parsed: AppSettings = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed.active_model_file.as_deref(), Some("model.gguf"));
+
+        // Unknown keys from future versions must not break parsing.
+        let forward: AppSettings =
+            serde_json::from_str(r#"{"activeModelFile":"a.gguf","newField":1}"#).unwrap();
+        assert_eq!(forward.active_model_file.as_deref(), Some("a.gguf"));
+    }
+
+    #[test]
+    fn scan_lists_finals_and_partials() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.gguf"), [0u8; 5]).unwrap();
+        std::fs::write(dir.path().join("b.gguf.part"), [0u8; 3]).unwrap();
+        // Final and partial for the same model: final must win.
+        std::fs::write(dir.path().join("c.gguf"), [0u8; 7]).unwrap();
+        std::fs::write(dir.path().join("c.gguf.part"), [0u8; 2]).unwrap();
+        // Unrelated files are ignored.
+        std::fs::write(dir.path().join("notes.txt"), [0u8; 9]).unwrap();
+        std::fs::write(dir.path().join("d.txt.part"), [0u8; 9]).unwrap();
+
+        let models = scan_models_dir(dir.path()).unwrap();
+        assert_eq!(
+            models,
+            vec![
+                LocalModel {
+                    file: "a.gguf".into(),
+                    size_bytes: 5,
+                    partial: false
+                },
+                LocalModel {
+                    file: "b.gguf".into(),
+                    size_bytes: 3,
+                    partial: true
+                },
+                LocalModel {
+                    file: "c.gguf".into(),
+                    size_bytes: 7,
+                    partial: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_missing_dir_errors() {
+        assert!(scan_models_dir(std::path::Path::new("/nonexistent/xyz")).is_err());
+    }
 }
