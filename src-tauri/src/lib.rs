@@ -3,6 +3,10 @@ pub mod llama;
 pub mod manifest;
 pub mod models;
 
+#[cfg(test)]
+#[path = "../tests/helpers.rs"]
+mod test_helpers;
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

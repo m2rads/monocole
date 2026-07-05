@@ -11,8 +11,21 @@ rust-version = "1.57"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# All tests live in tests/ but are compiled as in-crate modules (see the
+# #[path] declarations at the bottom of each src/*.rs file), giving them
+# access to private items. autotests is off so Cargo doesn't also try to
+# build tests/*.rs as standalone integration crates.
+autotests = false
+
 [lib]
 name = "app_lib"
+doctest = false
+
+# The binary is a thin shim around app_lib::run(); no tests of its own.
+[[bin]]
+name = "app"
+path = "src/main.rs"
+test = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
