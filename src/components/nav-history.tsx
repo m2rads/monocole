@@ -18,6 +18,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useSessions } from "@/hooks/use-sessions"
+import { useView } from "@/hooks/use-view"
 import { cn } from "@/lib/utils"
 import { ChevronUpIcon, MoreHorizontalIcon, Trash2Icon } from "lucide-react"
 
@@ -27,6 +28,7 @@ export function NavHistory() {
   const { isMobile } = useSidebar()
   const { sessions, activeSession, selectSession, deleteSession } =
     useSessions()
+  const { setView } = useView()
   const [expanded, setExpanded] = React.useState(false)
   const listRef = React.useRef<HTMLDivElement>(null)
 
@@ -59,7 +61,10 @@ export function NavHistory() {
             <SidebarMenuItem key={session.id}>
               <SidebarMenuButton
                 isActive={session.id === activeSession?.id}
-                onClick={() => selectSession(session.id)}
+                onClick={() => {
+                  selectSession(session.id)
+                  setView("chat")
+                }}
               >
                 <span>{session.title}</span>
               </SidebarMenuButton>

@@ -27,6 +27,8 @@ export function NavMain({
     items?: {
       title: string
       url: string
+      isActive?: boolean
+      onClick?: () => void
     }[]
   }[]
 }) {
@@ -63,7 +65,10 @@ export function NavMain({
               <SidebarMenuSub>
                 {item.items?.map((subItem) => (
                   <SidebarMenuSubItem key={subItem.title}>
-                    <SidebarMenuSubButton render={<a href={subItem.url} />}>
+                    <SidebarMenuSubButton
+                      isActive={subItem.isActive}
+                      onClick={subItem.onClick}
+                    >
                       <span>{subItem.title}</span>
                     </SidebarMenuSubButton>
                   </SidebarMenuSubItem>

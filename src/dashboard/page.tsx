@@ -1,5 +1,6 @@
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatView } from "@/components/chat-view"
+import { ModelsView } from "@/components/models-view"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -8,9 +9,11 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { useSessions } from "@/hooks/use-sessions"
+import { useView } from "@/hooks/use-view"
 
 export default function Page() {
   const { activeSession } = useSessions()
+  const { view } = useView()
 
   return (
     <SidebarProvider>
@@ -24,14 +27,16 @@ export default function Page() {
               className="mr-2 self-center! data-[orientation=vertical]:h-4"
             />
             <span className="truncate text-sm font-medium">
-              {activeSession?.title ?? "New Session"}
+              {view === "models"
+                ? "Settings · Models"
+                : (activeSession?.title ?? "New Session")}
             </span>
           </div>
           <div className="ml-auto px-4">
             <ModeToggle />
           </div>
         </header>
-        <ChatView />
+        {view === "models" ? <ModelsView /> : <ChatView />}
       </SidebarInset>
     </SidebarProvider>
   )

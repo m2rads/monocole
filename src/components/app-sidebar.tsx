@@ -16,6 +16,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { useSessions } from "@/hooks/use-sessions"
+import { useView } from "@/hooks/use-view"
 import { GalleryVerticalEndIcon, TerminalSquareIcon, Settings2Icon } from "lucide-react"
 
 const user = {
@@ -26,13 +27,17 @@ const user = {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { startNewSession } = useSessions()
+  const { view, setView } = useView()
 
   const navMain = [
     {
       title: "New Session",
       url: "#",
       icon: <TerminalSquareIcon />,
-      onClick: startNewSession,
+      onClick: () => {
+        startNewSession()
+        setView("chat")
+      },
     },
     {
       title: "Settings",
@@ -42,6 +47,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         {
           title: "Models",
           url: "#",
+          isActive: view === "models",
+          onClick: () => setView("models"),
         },
       ],
     },
