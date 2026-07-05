@@ -7,12 +7,17 @@ export function ChatView() {
   const { activeSession, sendMessage } = useSessions()
   const [input, setInput] = React.useState("")
   const bottomRef = React.useRef<HTMLDivElement>(null)
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
 
   const messages = activeSession?.messages ?? []
 
   React.useEffect(() => {
     bottomRef.current?.scrollIntoView()
   }, [messages.length, activeSession?.id])
+
+  React.useEffect(() => {
+    textareaRef.current?.focus()
+  }, [activeSession?.id])
 
   function submit() {
     if (!input.trim()) return
@@ -53,6 +58,7 @@ export function ChatView() {
         }}
       >
         <Textarea
+          ref={textareaRef}
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
