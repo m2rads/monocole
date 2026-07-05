@@ -19,39 +19,25 @@ import {
 } from "@/components/ui/sidebar"
 import { useSessions } from "@/hooks/use-sessions"
 import { cn } from "@/lib/utils"
-import { MoreHorizontalIcon, Trash2Icon } from "lucide-react"
+import { ChevronUpIcon, MoreHorizontalIcon, Trash2Icon } from "lucide-react"
 
-// SidebarMenuButton is h-8 (32px) and SidebarMenu uses gap-1 (4px).
-const ITEM_HEIGHT = 32
-const ITEM_GAP = 4
+const MAX_VISIBLE = 7
 
 export function NavHistory() {
   const { isMobile } = useSidebar()
   const { sessions, activeSession, selectSession, deleteSession } =
     useSessions()
   const [expanded, setExpanded] = React.useState(false)
-  const [maxVisible, setMaxVisible] = React.useState(Infinity)
   const listRef = React.useRef<HTMLDivElement>(null)
 
-  React.useLayoutEffect(() => {
-    const el = listRef.current
-    if (!el) return
-    const update = () => {
-      const rows = Math.floor(
-        (el.clientHeight + ITEM_GAP) / (ITEM_HEIGHT + ITEM_GAP)
-      )
-      setMaxVisible(Math.max(rows, 2))
-    }
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
+  function collapse() {
+    setExpanded(false)
+    listRef.current?.scrollTo({ top: 0 })
+  }
 
-  // Reserve one row for the More button when collapsed and overflowing.
-  const overflowing = sessions.length > maxVisible
+  const overflowing = sessions.length > MAX_VISIBLE
   const visibleSessions =
-    expanded || !overflowing ? sessions : sessions.slice(0, maxVisible - 1)
+    expanded || !overflowing ? sessions : sessions.slice(0, MAX_VISIBLE)
 
   return (
     <SidebarGroup className="flex min-h-0 flex-1 flex-col group-data-[collapsible=icon]:hidden">
@@ -105,14 +91,18 @@ export function NavHistory() {
               </DropdownMenu>
             </SidebarMenuItem>
           ))}
-          {overflowing && !expanded && (
+          {overflowing && (
             <SidebarMenuItem>
               <SidebarMenuButton
                 className="text-sidebar-foreground/70"
-                onClick={() => setExpanded(true)}
+                onClick={() => (expanded ? collapse() : setExpanded(true))}
               >
-                <MoreHorizontalIcon className="text-sidebar-foreground/70" />
-                <span>More</span>
+                {expanded ? (
+                  <ChevronUpIcon className="text-sidebar-foreground/70" />
+                ) : (
+                  <MoreHorizontalIcon className="text-sidebar-foreground/70" />
+                )}
+                <span>{expanded ? "Less" : "More"}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           )}
