@@ -29,47 +29,66 @@ export function ChatView() {
     setInput("")
   }
 
+  const composer = (
+    <form
+      className="w-full"
+      onSubmit={(event) => {
+        event.preventDefault()
+        submit()
+      }}
+    >
+      <Textarea
+        ref={textareaRef}
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault()
+            submit()
+          }
+        }}
+        placeholder={streaming ? "Generating…" : "How can I help you?"}
+        autoFocus
+      />
+    </form>
+  )
+
+  // Empty session: welcome message and composer centered in the window.
+  if (messages.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-4 pb-16">
+        <div className="flex w-full max-w-2xl flex-col gap-6">
+          <div className="text-center">
+            <h2 className="font-heading text-lg font-semibold tracking-wider uppercase">
+              Welcome to Minicole
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Connect your smart Monocole and start a session.
+            </p>
+          </div>
+          {composer}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-6">
-          {messages.length === 0 ? (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              Start a new conversation below.
-            </p>
-          ) : (
-            messages.map((message, index) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                streaming={streaming && index === messages.length - 1}
-              />
-            ))
-          )}
+          {messages.map((message, index) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              streaming={streaming && index === messages.length - 1}
+            />
+          ))}
           <div ref={bottomRef} />
         </div>
       </div>
-      <form
-        className="mx-auto w-full max-w-2xl shrink-0 px-4 pb-6"
-        onSubmit={(event) => {
-          event.preventDefault()
-          submit()
-        }}
-      >
-        <Textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault()
-              submit()
-            }
-          }}
-          placeholder={streaming ? "Generating…" : "Type a message…"}
-          autoFocus
-        />
-      </form>
+      <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pb-6">
+        {composer}
+      </div>
     </div>
   )
 }
