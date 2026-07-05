@@ -78,7 +78,7 @@ export function NavHistory() {
                   }
                 >
                   <MoreHorizontalIcon />
-                  <span className="sr-only">More</span>
+                  <span className="sr-only">Session options</span>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
                   className="w-fit"
