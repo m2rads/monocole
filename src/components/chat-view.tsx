@@ -1,26 +1,30 @@
 import * as React from "react"
 
 import { Textarea } from "@/components/ui/textarea"
-import { useSessions } from "@/hooks/use-sessions"
+import { useSessions, type ChatMessage } from "@/hooks/use-sessions"
+import { cn } from "@/lib/utils"
 
 export function ChatView() {
-  const { activeSession, sendMessage } = useSessions()
+  const { activeSession, streamingSessionId, sendMessage } = useSessions()
   const [input, setInput] = React.useState("")
   const bottomRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
 
   const messages = activeSession?.messages ?? []
+  const streaming =
+    streamingSessionId !== null && streamingSessionId === activeSession?.id
+  const lastMessage = messages[messages.length - 1]
 
   React.useEffect(() => {
     bottomRef.current?.scrollIntoView()
-  }, [messages.length, activeSession?.id])
+  }, [messages.length, lastMessage?.content, activeSession?.id])
 
   React.useEffect(() => {
     textareaRef.current?.focus()
   }, [activeSession?.id])
 
   function submit() {
-    if (!input.trim()) return
+    if (!input.trim() || streamingSessionId !== null) return
     sendMessage(input)
     setInput("")
   }
@@ -34,17 +38,12 @@ export function ChatView() {
               Start a new conversation below.
             </p>
           ) : (
-            messages.map((message) => (
-              <div
+            messages.map((message, index) => (
+              <MessageBubble
                 key={message.id}
-                className={
-                  message.role === "user"
-                    ? "ml-auto max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap"
-                    : "max-w-[80%] text-sm whitespace-pre-wrap"
-                }
-              >
-                {message.content}
-              </div>
+                message={message}
+                streaming={streaming && index === messages.length - 1}
+              />
             ))
           )}
           <div ref={bottomRef} />
@@ -67,10 +66,58 @@ export function ChatView() {
               submit()
             }
           }}
-          placeholder="Type a message…"
+          placeholder={streaming ? "Generating…" : "Type a message…"}
           autoFocus
         />
       </form>
+    </div>
+  )
+}
+
+function MessageBubble({
+  message,
+  streaming,
+}: {
+  message: ChatMessage
+  streaming: boolean
+}) {
+  if (message.role === "user") {
+    return (
+      <div className="ml-auto max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
+        {message.content}
+      </div>
+    )
+  }
+
+  if (message.error) {
+    return (
+      <div className="max-w-[80%] text-sm whitespace-pre-wrap">
+        {message.content && <p className="mb-1">{message.content}</p>}
+        <p className="text-destructive">{message.error}</p>
+      </div>
+    )
+  }
+
+  // Assistant placeholder before the first token arrives.
+  if (!message.content && streaming) {
+    return (
+      <div className="flex h-6 items-center">
+        <span className="size-2 animate-pulse rounded-full bg-muted-foreground" />
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={cn(
+        "max-w-[80%] text-sm whitespace-pre-wrap",
+        !message.content && "text-muted-foreground"
+      )}
+    >
+      {message.content || "(no response)"}
+      {streaming && (
+        <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-foreground align-middle" />
+      )}
     </div>
   )
 }

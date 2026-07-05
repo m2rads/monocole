@@ -103,6 +103,16 @@ fn emit(app: &AppHandle, id: &str, status: &'static str, downloaded: u64, total:
     );
 }
 
+/// Absolute path to the active model file, if one is set and still on disk.
+pub fn active_model_path(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let settings = read_settings(app);
+    let Some(file) = settings.active_model_file else {
+        return Ok(None);
+    };
+    let path = models_dir(app)?.join(&file);
+    Ok(path.is_file().then_some(path))
+}
+
 #[tauri::command]
 pub fn list_local_models(app: AppHandle) -> Result<Vec<LocalModel>, String> {
     let dir = models_dir(&app)?;
