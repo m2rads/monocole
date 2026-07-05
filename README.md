@@ -1,21 +1,31 @@
-# React + TypeScript + Vite + shadcn/ui
+# Minicole
 
-This is a template for a new Vite project with React, TypeScript, and shadcn/ui.
+Desktop companion app for a smart monocle wearable. The monocle sends voice
+(and later images) over BLE; the app runs local inference with llama.cpp and
+streams tokens back to the monocle's display. Plans and protocol docs live in
+[`docs/`](docs/).
 
-## Adding components
+## Setup
 
-To add components to your app, run the following command:
+Prerequisites: [bun](https://bun.sh), Rust (stable), and the
+[Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
-npx shadcn@latest add button
+bun install
+./scripts/fetch-llama-server.sh   # fetches the llama-server binary (gitignored)
+bun tauri dev
 ```
 
-This will place the ui components in the `src/components` directory.
+Without the fetch script, chat will error — the app spawns `llama-server`
+from `src-tauri/binaries/llama/`. Models are downloaded in-app under
+Settings → Models.
 
-## Using components
+## Commands
 
-To use the components in your app, import them as follows:
-
-```tsx
-import { Button } from "@/components/ui/button"
+```bash
+bun tauri dev      # run the app
+bun run build      # typecheck + bundle frontend
+bun run test       # frontend tests (Vitest — never `bun test`)
+bun test:rust      # backend tests
+bun run typecheck
 ```
