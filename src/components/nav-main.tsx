@@ -23,6 +23,7 @@ export function NavMain({
     url: string
     icon?: React.ReactNode
     isActive?: boolean
+    onClick?: () => void
     items?: {
       title: string
       url: string
@@ -33,7 +34,18 @@ export function NavMain({
     <SidebarGroup>
       <SidebarGroupLabel>Platform</SidebarGroupLabel>
       <SidebarMenu>
-        {items.map((item) => (
+        {items.map((item) =>
+          !item.items?.length ? (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton
+                tooltip={item.title}
+                onClick={item.onClick}
+              >
+                {item.icon}
+                <span>{item.title}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ) : (
           <Collapsible
             key={item.title}
             defaultOpen={item.isActive}
@@ -59,7 +71,8 @@ export function NavMain({
               </SidebarMenuSub>
             </CollapsibleContent>
           </Collapsible>
-        ))}
+          )
+        )}
       </SidebarMenu>
     </SidebarGroup>
   )
