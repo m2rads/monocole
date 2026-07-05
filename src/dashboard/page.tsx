@@ -1,5 +1,6 @@
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatView } from "@/components/chat-view"
+import { ModeToggle } from "@/components/mode-toggle"
 import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
@@ -25,6 +26,9 @@ export default function Page() {
             <span className="truncate text-sm font-medium">
               {activeSession?.title ?? "New Session"}
             </span>
+          </div>
+          <div className="ml-auto px-4">
+            <ModeToggle />
           </div>
         </header>
         <ChatView />
