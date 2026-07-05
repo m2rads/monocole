@@ -20,7 +20,7 @@ export default function Page() {
             <SidebarTrigger className="-ml-1" />
             <Separator
               orientation="vertical"
-              className="mr-2 data-[orientation=vertical]:h-4"
+              className="mr-2 self-center! data-[orientation=vertical]:h-4"
             />
             <span className="truncate text-sm font-medium">
               {activeSession?.title ?? "New Session"}
