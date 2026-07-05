@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/sidebar"
 import { useSessions } from "@/hooks/use-sessions"
 import { useView } from "@/hooks/use-view"
-import { GalleryVerticalEndIcon, TerminalSquareIcon, Settings2Icon } from "lucide-react"
+import { GalleryVerticalEndIcon, PlusIcon, Settings2Icon } from "lucide-react"
 
 const user = {
   name: "shadcn",
@@ -33,7 +33,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     {
       title: "New Session",
       url: "#",
-      icon: <TerminalSquareIcon />,
+      icon: <PlusIcon />,
       onClick: () => {
         startNewSession()
         setView("chat")
