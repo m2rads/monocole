@@ -1,4 +1,12 @@
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { useModels, type DownloadState, type LocalModel } from "@/hooks/use-models"
 import type { ModelEntry } from "@/lib/model-manifest"
 import { CheckIcon, Trash2Icon, XIcon } from "lucide-react"
@@ -73,26 +81,18 @@ function ModelCard({
   const partial = Boolean(local?.partial) && !downloading
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border p-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-medium">{entry.name}</h3>
-            {isActive && (
-              <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground uppercase">
-                Active
-              </span>
-            )}
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {entry.description}
-          </p>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">
-            {entry.quant} · {formatGb(entry.sizeBytes)} · needs{" "}
-            {entry.minRamGb} GB RAM
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {entry.name}
+          {isActive && (
+            <span className="rounded-full bg-primary px-2 py-0.5 font-sans text-[10px] font-semibold tracking-normal text-primary-foreground">
+              Active
+            </span>
+          )}
+        </CardTitle>
+        <CardDescription>{entry.description}</CardDescription>
+        <CardAction className="flex items-center gap-2">
           {downloading ? (
             <Button variant="outline" size="xs" onClick={onCancel}>
               <XIcon data-icon="inline-start" />
@@ -124,17 +124,23 @@ function ModelCard({
               )}
             </>
           )}
-        </div>
-      </div>
-      {downloading && downloadState && (
-        <DownloadProgress state={downloadState} />
-      )}
-      {downloadState?.status === "failed" && (
-        <p className="text-xs text-destructive">
-          Download failed: {downloadState.error ?? "unknown error"}
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="font-mono text-xs text-muted-foreground">
+          {entry.quant} · {formatGb(entry.sizeBytes)} · needs {entry.minRamGb}{" "}
+          GB RAM
         </p>
-      )}
-    </div>
+        {downloading && downloadState && (
+          <DownloadProgress state={downloadState} />
+        )}
+        {downloadState?.status === "failed" && (
+          <p className="text-xs text-destructive">
+            Download failed: {downloadState.error ?? "unknown error"}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
