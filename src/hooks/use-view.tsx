@@ -1,6 +1,6 @@
 import * as React from "react"
 
-export type View = "chat" | "models"
+export type View = "chat" | "models" | "connection"
 
 type ViewContextValue = {
   view: View

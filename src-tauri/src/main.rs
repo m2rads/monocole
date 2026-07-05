@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod ble;
 mod llama;
 mod manifest;
 mod models;
@@ -12,6 +13,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(models::Downloads::default())
         .manage(llama::LlamaState::default())
+        .manage(ble::BleState::default())
         .invoke_handler(tauri::generate_handler![
             manifest::get_model_manifest,
             models::list_local_models,
@@ -22,7 +24,12 @@ fn main() {
             models::set_active_model,
             llama::chat_stream,
             llama::generate_session_title,
-            llama::llama_status
+            llama::llama_status,
+            ble::ble_status,
+            ble::ble_start_scan,
+            ble::ble_stop_scan,
+            ble::ble_connect,
+            ble::ble_disconnect
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

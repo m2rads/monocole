@@ -50,6 +50,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           isActive: view === "models",
           onClick: () => setView("models"),
         },
+        {
+          title: "Connection",
+          url: "#",
+          isActive: view === "connection",
+          onClick: () => setView("connection"),
+        },
       ],
     },
   ]

@@ -22,6 +22,7 @@ tauri-plugin-shell = "2"
 reqwest = { version = "0.12", features = ["stream", "json"] }
 tokio = { version = "1", features = ["fs", "io-util"] }
 futures-util = "0.3"
+btleplug = "0.11"
 
 [features]
 # by default Tauri runs in production mode

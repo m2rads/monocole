@@ -1,5 +1,6 @@
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatView } from "@/components/chat-view"
+import { ConnectionView } from "@/components/connection-view"
 import { ModelsView } from "@/components/models-view"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Separator } from "@/components/ui/separator"
@@ -29,14 +30,22 @@ export default function Page() {
             <span className="truncate text-sm font-medium">
               {view === "models"
                 ? "Settings · Models"
-                : (activeSession?.title ?? "New Session")}
+                : view === "connection"
+                  ? "Settings · Connection"
+                  : (activeSession?.title ?? "New Session")}
             </span>
           </div>
           <div className="ml-auto px-4">
             <ModeToggle />
           </div>
         </header>
-        {view === "models" ? <ModelsView /> : <ChatView />}
+        {view === "models" ? (
+          <ModelsView />
+        ) : view === "connection" ? (
+          <ConnectionView />
+        ) : (
+          <ChatView />
+        )}
       </SidebarInset>
     </SidebarProvider>
   )
