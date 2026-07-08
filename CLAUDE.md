@@ -57,9 +57,11 @@ Backend (src-tauri/src/):
 - `manifest.rs` — curated model catalog compiled in from
   `src-tauri/manifest/models.json` (4 models; sizeBytes approximate,
   sha256 currently null).
-- `models.rs` — download engine: resumable (.part + HTTP Range), progress
-  events every 4MB, cancel, delete, active-model persisted in
-  `<app-data>/settings.json`; models stored in `<app-data>/models/`
+- `models/` — model management, one submodule per concern (shared path
+  helpers in mod.rs): `files.rs` (naming rules, dir scanning, delete),
+  `download.rs` (resumable engine: .part + HTTP Range, progress events every
+  4MB, cancel, direct-URL entry point), `settings.rs` (active-model persisted
+  in `<app-data>/settings.json`); models stored in `<app-data>/models/`
   (macOS: `~/Library/Application Support/com.atelier.minicole/`).
 - `llama.rs` — sidecar lifecycle: spawns llama-server on a random free port
   with the active model, /health polling (120s), auto-restart on model
@@ -79,10 +81,10 @@ Backend (src-tauri/src/):
 - Rust: 29 tests, all files in `src-tauri/tests/` but compiled as in-crate
   modules via `#[path]` hooks at the bottom of each src file (private access;
   `autotests = false` in Cargo.toml — top-level tests/*.rs are NOT separate
-  crates). One consolidated file per domain: models_test.rs, llama_test.rs,
-  manifest_test.rs, ble_test.rs + shared `tests/helpers.rs`
-  (crate::test_helpers). Download/chat tests run against real local
-  tiny_http servers.
+  crates). One file per domain, mirroring src: llama_test.rs,
+  manifest_test.rs, ble_test.rs, models/{files,download,settings}_test.rs +
+  shared `tests/helpers.rs` (crate::test_helpers). Download/chat tests run
+  against real local tiny_http servers.
 - Frontend: 27 Vitest tests in `tests/` (project root): use-sessions,
   use-models, use-ble, chat-view, nav-history. Tauri IPC mocked globally in
   `tests/setup.ts`; drive it with `tests/tauri-mocks.ts` (`invokeMock`,

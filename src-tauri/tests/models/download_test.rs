@@ -1,39 +1,15 @@
-//! All tests for the models module: validation and scanning logic, plus the
-//! download engine exercised against a real local HTTP server.
+//! Tests for the download engine: URL file-name derivation, plus resumable
+//! downloads exercised against a real local HTTP server.
 //!
-//! Compiled as a child module of `models` (see the `#[path]` declaration at
-//! the bottom of src/models.rs), so private items are accessible.
+//! Compiled as a child module of `models::download` (see the `#[path]`
+//! declaration at the bottom of src/models/download.rs), so private items
+//! are accessible.
 
 use std::sync::atomic::AtomicBool;
 
 use super::*;
 use crate::manifest::ModelEntry;
 use crate::test_helpers::spawn_server;
-
-// ---------------------------------------------------------------------------
-// File name validation
-// ---------------------------------------------------------------------------
-
-#[test]
-fn valid_file_names_pass() {
-    assert!(validate_file_name("model.gguf").is_ok());
-    assert!(validate_file_name("Llama-3.2-3B-Instruct-Q4_K_M.gguf").is_ok());
-}
-
-#[test]
-fn invalid_file_names_fail() {
-    for name in [
-        "",
-        "model.bin",
-        "model.gguf.part",
-        ".hidden.gguf",
-        "../escape.gguf",
-        "dir/model.gguf",
-        "dir\\model.gguf",
-    ] {
-        assert!(validate_file_name(name).is_err(), "should reject {name:?}");
-    }
-}
 
 // ---------------------------------------------------------------------------
 // File name derivation from download URLs
@@ -66,72 +42,6 @@ fn file_name_from_url_rejects_bad_urls() {
     ] {
         assert!(file_name_from_url(url).is_err(), "should reject {url:?}");
     }
-}
-
-// ---------------------------------------------------------------------------
-// Settings persistence
-// ---------------------------------------------------------------------------
-
-#[test]
-fn settings_parse_defaults_and_roundtrip() {
-    let empty: AppSettings = serde_json::from_str("{}").unwrap();
-    assert!(empty.active_model_file.is_none());
-
-    let settings = AppSettings {
-        active_model_file: Some("model.gguf".into()),
-    };
-    let raw = serde_json::to_string(&settings).unwrap();
-    let parsed: AppSettings = serde_json::from_str(&raw).unwrap();
-    assert_eq!(parsed.active_model_file.as_deref(), Some("model.gguf"));
-
-    // Unknown keys from future versions must not break parsing.
-    let forward: AppSettings =
-        serde_json::from_str(r#"{"activeModelFile":"a.gguf","newField":1}"#).unwrap();
-    assert_eq!(forward.active_model_file.as_deref(), Some("a.gguf"));
-}
-
-// ---------------------------------------------------------------------------
-// Local model scanning
-// ---------------------------------------------------------------------------
-
-#[test]
-fn scan_lists_finals_and_partials() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a.gguf"), [0u8; 5]).unwrap();
-    std::fs::write(dir.path().join("b.gguf.part"), [0u8; 3]).unwrap();
-    // Final and partial for the same model: final must win.
-    std::fs::write(dir.path().join("c.gguf"), [0u8; 7]).unwrap();
-    std::fs::write(dir.path().join("c.gguf.part"), [0u8; 2]).unwrap();
-    // Unrelated files are ignored.
-    std::fs::write(dir.path().join("notes.txt"), [0u8; 9]).unwrap();
-    std::fs::write(dir.path().join("d.txt.part"), [0u8; 9]).unwrap();
-
-    let models = scan_models_dir(dir.path()).unwrap();
-    assert_eq!(
-        models,
-        vec![
-            LocalModel {
-                file: "a.gguf".into(),
-                size_bytes: 5,
-                partial: false
-            },
-            LocalModel {
-                file: "b.gguf".into(),
-                size_bytes: 3,
-                partial: true
-            },
-            LocalModel {
-                file: "c.gguf".into(),
-                size_bytes: 7,
-                partial: false
-            },
-        ]
-    );
-}
-
-#[test]
-fn scan_missing_dir_errors() {
-    assert!(scan_models_dir(std::path::Path::new("/nonexistent/xyz")).is_err());
 }
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ fn entries_are_well_formed() {
         assert!(entry.min_ram_gb > 0, "{}: minRamGb must be set", entry.id);
         // File names become paths inside the models dir; they must pass the
         // same validation the commands enforce.
-        crate::models::validate_file_name(&entry.file)
+        crate::models::files::validate_file_name(&entry.file)
             .unwrap_or_else(|err| panic!("{}: {err}", entry.id));
         assert!(
             entry.url.starts_with("https://huggingface.co/"),
