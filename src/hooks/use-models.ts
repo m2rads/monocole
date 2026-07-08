@@ -63,6 +63,13 @@ export function useModels() {
     })
   }, [])
 
+  // Progress events for URL downloads are keyed by the file name the backend
+  // derives from the URL. Rejects on invalid URLs and download failures, so
+  // the caller can surface the error next to the input.
+  const downloadFromUrl = React.useCallback((url: string) => {
+    return invoke("download_model_from_url", { url })
+  }, [])
+
   const cancel = React.useCallback((id: string) => {
     invoke("cancel_download", { id }).catch((err) => setError(String(err)))
   }, [])
@@ -98,6 +105,7 @@ export function useModels() {
     downloads,
     error,
     download,
+    downloadFromUrl,
     cancel,
     remove,
     setActive,

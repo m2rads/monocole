@@ -36,6 +36,39 @@ fn invalid_file_names_fail() {
 }
 
 // ---------------------------------------------------------------------------
+// File name derivation from download URLs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn file_name_from_url_takes_last_path_segment() {
+    assert_eq!(
+        file_name_from_url(
+            "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
+        )
+        .unwrap(),
+        "Qwen3-4B-Q4_K_M.gguf"
+    );
+    // Query strings must not leak into the file name.
+    assert_eq!(
+        file_name_from_url("https://example.com/models/m.gguf?download=true").unwrap(),
+        "m.gguf"
+    );
+}
+
+#[test]
+fn file_name_from_url_rejects_bad_urls() {
+    for url in [
+        "not a url",
+        "ftp://example.com/m.gguf",
+        "https://example.com/",
+        "https://example.com/model.bin",
+        "https://example.com/.hidden.gguf",
+    ] {
+        assert!(file_name_from_url(url).is_err(), "should reject {url:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Settings persistence
 // ---------------------------------------------------------------------------
 

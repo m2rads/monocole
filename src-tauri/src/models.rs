@@ -17,9 +17,11 @@ use crate::manifest::{self, ModelEntry};
 pub const DOWNLOAD_EVENT: &str = "model-download";
 const PROGRESS_EMIT_STEP: u64 = 4 * 1024 * 1024;
 
-/// Cancellation flags for in-flight downloads, keyed by manifest model id.
+/// In-flight downloads keyed by download id (manifest model id, or the file
+/// name for URL downloads): the cancellation flag plus the target file name,
+/// so two downloads can never write the same .part file.
 #[derive(Default)]
-pub struct Downloads(Mutex<HashMap<String, Arc<AtomicBool>>>);
+pub struct Downloads(Mutex<HashMap<String, (Arc<AtomicBool>, String)>>);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +71,24 @@ pub(crate) fn validate_file_name(file: &str) -> Result<(), String> {
         return Err(format!("invalid model file name: {file}"));
     }
     Ok(())
+}
+
+/// Derives the on-disk file name from a direct-download URL: the last path
+/// segment, which must be a valid .gguf file name.
+pub(crate) fn file_name_from_url(url: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|err| format!("invalid URL: {err}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("URL must use http or https".into());
+    }
+    let file = parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .unwrap_or("");
+    if !file.ends_with(".gguf") {
+        return Err("URL must point to a .gguf file".into());
+    }
+    validate_file_name(file)?;
+    Ok(file.to_string())
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -194,12 +214,8 @@ pub fn delete_model(
     validate_file_name(&file)?;
 
     // Refuse while a download for this file is in flight; cancel first.
-    if let Ok(manifest) = manifest::bundled() {
-        if let Some(entry) = manifest.models.iter().find(|m| m.file == file) {
-            if state.0.lock().unwrap().contains_key(&entry.id) {
-                return Err("download in progress — cancel it first".into());
-            }
-        }
+    if state.0.lock().unwrap().values().any(|(_, f)| f == &file) {
+        return Err("download in progress — cancel it first".into());
     }
 
     let dir = models_dir(&app)?;
@@ -222,7 +238,7 @@ pub fn delete_model(
 #[tauri::command]
 pub fn cancel_download(state: State<'_, Downloads>, id: String) -> Result<(), String> {
     match state.0.lock().unwrap().get(&id) {
-        Some(flag) => {
+        Some((flag, _)) => {
             flag.store(true, Ordering::Relaxed);
             Ok(())
         }
@@ -243,7 +259,42 @@ pub async fn download_model(
         .find(|model| model.id == id)
         .ok_or_else(|| format!("unknown model id: {id}"))?;
     validate_file_name(&entry.file)?;
+    execute_download(app, state, id, entry).await
+}
 
+/// Downloads a GGUF from an arbitrary direct URL (e.g. a Hugging Face
+/// download link). The on-disk name comes from the URL's last path segment;
+/// progress events are keyed by that file name instead of a manifest id.
+#[tauri::command]
+pub async fn download_model_from_url(
+    app: AppHandle,
+    state: State<'_, Downloads>,
+    url: String,
+) -> Result<(), String> {
+    let file = file_name_from_url(&url)?;
+    let entry = ModelEntry {
+        id: file.clone(),
+        name: file.clone(),
+        description: String::new(),
+        repo: String::new(),
+        file: file.clone(),
+        url,
+        quant: String::new(),
+        // Unknown until the response arrives; progress totals fall back to
+        // the Content-Length header.
+        size_bytes: 0,
+        min_ram_gb: 0,
+        sha256: None,
+    };
+    execute_download(app, state, file, entry).await
+}
+
+async fn execute_download(
+    app: AppHandle,
+    state: State<'_, Downloads>,
+    id: String,
+    entry: ModelEntry,
+) -> Result<(), String> {
     let final_path = models_dir(&app)?.join(&entry.file);
     if final_path.is_file() {
         let size = std::fs::metadata(&final_path)
@@ -256,10 +307,10 @@ pub async fn download_model(
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut active = state.0.lock().unwrap();
-        if active.contains_key(&id) {
+        if active.contains_key(&id) || active.values().any(|(_, f)| f == &entry.file) {
             return Err("download already in progress".into());
         }
-        active.insert(id.clone(), cancel.clone());
+        active.insert(id.clone(), (cancel.clone(), entry.file.clone()));
     }
 
     let outcome = run_download(&entry, &final_path, &cancel, |downloaded, total| {

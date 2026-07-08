@@ -93,6 +93,52 @@ describe("useModels", () => {
     await waitFor(() => expect(result.current.locals).toHaveLength(1))
   })
 
+  it("downloads from a URL and tracks progress under the derived file name", async () => {
+    mockBackend()
+    const { result } = renderHook(() => useModels())
+    await waitFor(() => expect(result.current.manifest).not.toBeNull())
+
+    act(() => {
+      void result.current.downloadFromUrl(
+        "https://example.com/models/custom.gguf"
+      )
+    })
+    expect(invokeCalls("download_model_from_url")[0][1]).toEqual({
+      url: "https://example.com/models/custom.gguf",
+    })
+
+    // The backend keys events for URL downloads by the derived file name.
+    act(() => {
+      emitTauriEvent("model-download", {
+        id: "custom.gguf",
+        status: "downloading",
+        downloaded: 500,
+        total: 2000,
+      })
+    })
+    expect(result.current.downloads["custom.gguf"]).toMatchObject({
+      status: "downloading",
+      downloaded: 500,
+      total: 2000,
+    })
+  })
+
+  it("rejects downloadFromUrl so callers can show the error", async () => {
+    mockBackend()
+    const { result } = renderHook(() => useModels())
+    await waitFor(() => expect(result.current.manifest).not.toBeNull())
+
+    invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === "download_model_from_url") {
+        throw "URL must point to a .gguf file"
+      }
+      return undefined as never
+    })
+    await expect(
+      result.current.downloadFromUrl("https://example.com/model.bin")
+    ).rejects.toBe("URL must point to a .gguf file")
+  })
+
   it("surfaces failed downloads", async () => {
     mockBackend()
     const { result } = renderHook(() => useModels())

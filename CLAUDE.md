@@ -41,7 +41,9 @@ Frontend (src/):
   with More/Less overflow (MAX_VISIBLE const).
 - Models page (`components/models-view.tsx`, `hooks/use-models.ts`): curated
   catalog cards with download/progress/cancel/resume/delete and active-model
-  selection.
+  selection; "Add from URL" form for direct .gguf links (backend derives the
+  file name from the URL, events keyed by it) with a Custom models section
+  for non-catalog local files.
 - Connection page (`components/connection-view.tsx`, `hooks/use-ble.ts`):
   BLE scan (30s TTL) with discovered-device list, unnamed devices hidden by
   default, connect/disconnect, bluetooth-off detection.
@@ -74,14 +76,14 @@ Backend (src-tauri/src/):
 
 ## Tests
 
-- Rust: 27 tests, all files in `src-tauri/tests/` but compiled as in-crate
+- Rust: 29 tests, all files in `src-tauri/tests/` but compiled as in-crate
   modules via `#[path]` hooks at the bottom of each src file (private access;
   `autotests = false` in Cargo.toml — top-level tests/*.rs are NOT separate
   crates). One consolidated file per domain: models_test.rs, llama_test.rs,
   manifest_test.rs, ble_test.rs + shared `tests/helpers.rs`
   (crate::test_helpers). Download/chat tests run against real local
   tiny_http servers.
-- Frontend: 25 Vitest tests in `tests/` (project root): use-sessions,
+- Frontend: 27 Vitest tests in `tests/` (project root): use-sessions,
   use-models, use-ble, chat-view, nav-history. Tauri IPC mocked globally in
   `tests/setup.ts`; drive it with `tests/tauri-mocks.ts` (`invokeMock`,
   `emitTauriEvent`).
@@ -108,7 +110,7 @@ Backend (src-tauri/src/):
   video), Wi-Fi media plane deferred to v2. Planned home: `firmware/`.
 - **STT**: voice → text stage (likely whisper.cpp as a second sidecar) not
   started; chat is text-only today.
-- **Model acquisition UX**: only the curated list is implemented; "add from
-  Hugging Face repo/URL" and "import local GGUF" are planned advanced
-  options. Local GGUFs not in the manifest are listed by the backend but
-  invisible in the Models UI.
+- **Model acquisition UX**: curated list + direct .gguf URL download are
+  implemented; "browse a Hugging Face repo" and "import local GGUF file"
+  remain planned. Resuming a cancelled URL download requires re-pasting the
+  URL (source URLs are not persisted).

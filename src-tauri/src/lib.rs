@@ -17,6 +17,7 @@ pub fn run() {
             manifest::get_model_manifest,
             models::list_local_models,
             models::download_model,
+            models::download_model_from_url,
             models::cancel_download,
             models::delete_model,
             models::get_active_model,
