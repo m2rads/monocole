@@ -1,4 +1,4 @@
-# Minicole
+# Monocole
 
 Desktop companion app for a smart monocle wearable. The monocle sends voice
 (and later images) over BLE; the app runs local inference with llama.cpp and
