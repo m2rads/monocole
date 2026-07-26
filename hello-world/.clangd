@@ -1,0 +1,16 @@
+# clangd config for ESP-IDF (Xtensa) sources.
+# - CompilationDatabase points at build/, where `idf.py build` writes
+#   compile_commands.json (run a build first, or this file resolves nothing).
+# - Remove strips GCC-only flags that clangd's bundled clang rejects.
+# The Xtensa system-header paths come from --query-driver, set in
+# .zed/settings.json (clangd needs that as a launch arg, not here).
+CompileFlags:
+  CompilationDatabase: build
+  Remove:
+    - -mlongcalls
+    - -fno-shrink-wrap
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fno-split-wide-types-early
+    - -fno-malloc-dce
+    - -fzero-init-padding-bits*
