@@ -4,7 +4,7 @@
       "binary": {
         "path": "/Users/m2rads/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
         "arguments": [
-          "--query-driver=/Users/m2rads/.espressif/tools/xtensa-esp-elf/**/bin/xtensa-esp32s3-elf-*",
+          "--query-driver=/Users/m2rads/.espressif/tools/xtensa-esp-elf/**/bin/xtensa-esp32*-elf-*",
           "--background-index",
           "--header-insertion=never"
         ]
