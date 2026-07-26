@@ -1,7 +1,7 @@
 {
     "version":            "1.3",
     "project_name":       "hello_world",
-    "project_version":    "a2f7f1c-dirty",
+    "project_version":    "a1d11b5-dirty",
     "project_path":       "/Users/m2rads/Documents/projects/minicole/hello-world",
     "idf_path":           "/Users/m2rads/.espressif/v6.0.2/esp-idf",
     "build_dir":          "/Users/m2rads/Documents/projects/minicole/hello-world/build",
