@@ -614,7 +614,7 @@ app_main(void)
 
 #if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */
-    rc = ble_svc_gap_device_name_set("nimble-bleprph");
+    rc = ble_svc_gap_device_name_set("monocle-yours");
     assert(rc == 0);
 #endif
 
