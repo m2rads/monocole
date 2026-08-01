@@ -49,13 +49,17 @@ connection/session management. Full plans live in `docs/`.
 - **Session persistence**: sessions/messages are in-memory only and are lost
   on restart.
 - **Generation cancel**: no stop button; TODO in llama.rs stream_completion.
-- **BLE protocol**: GATT service/characteristics are a draft in
-  `docs/ble-protocol.md` — UUIDs unfrozen until the firmware throughput test
-  (milestone 2 in docs/firmware-plan.md). TODO(monocle-protocol) and
-  TODO(auto-reconnect) in ble.rs.
-- **Firmware**: not started. Decisions made: C++ on ESP-IDF v5, BLE-only v1
-  (voice ADPCM ~64kbps, on-demand JPEG stills — LLM consumes stills, not
-  video), Wi-Fi media plane deferred to v2. Planned home: `firmware/`.
+- **Monocle protocol**: the wire contract (both planes) is a draft in
+  `docs/protocol.md` — UUIDs, TCP port, and framing unfrozen until milestone 2.
+  TODO(monocle-protocol) and TODO(auto-reconnect) in ble.rs. `ble.rs` today
+  stops at service discovery: no characteristic read/write, no notification
+  subscription, and no TCP client exists yet.
+- **Firmware**: `firmware/` not started. Milestone 1 (advertise + connect) is
+  done via the stock `bleprph` example in `ble-examples/`, which the app
+  connects to unmodified. Decisions: C++ on ESP-IDF v6.0.2, NimBLE, and a
+  two-plane transport — BLE always-on for control/status/tokens/voice (ADPCM
+  ~64kbps), Wi-Fi on-demand for JPEG stills only (LLM consumes stills, not
+  video). See docs/firmware-plan.md for rejected alternatives.
 - **STT**: voice → text stage (likely whisper.cpp as a second sidecar) not
   started; chat is text-only today.
 - **Model acquisition UX**: curated list + direct .gguf URL download are

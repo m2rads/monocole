@@ -23,8 +23,12 @@ const SCAN_TTL: Duration = Duration::from_secs(30);
 // service UUID to the ScanFilter and to a "looks like a monocle" check.
 // TODO(auto-reconnect): persist the chosen device id in settings.json and
 // reconnect to it automatically on launch / signal loss.
-// TODO(monocle-protocol): after connect, subscribe to the input
-// characteristics (voice/video frames) and route them into a session.
+// TODO(monocle-protocol): after connect, subscribe to the voice and status
+// characteristics and route them into a session, and write control/tokens.
+// `discover_services()` below currently runs only as a connectivity check —
+// its result is dropped. Stills do NOT arrive here: they come over a TCP
+// socket on the Wi-Fi data plane, bootstrapped by writing credentials to the
+// wifi_creds characteristic. See docs/protocol.md.
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

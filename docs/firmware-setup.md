@@ -8,9 +8,8 @@ ESP32-S3. Written from the actual steps used to build the throwaway
 
 - Toolchain installed via **EIM** (ESP-IDF Installation Manager).
 - ESP-IDF version: **v6.0.2**, at `~/.espressif/v6.0.2/esp-idf/`.
-  - The firmware plan (`firmware-plan.md`) says v5.x. That is stale. We are
-    on v6.0.2. v6.0 is a major bump with breaking API changes from v5 — when
-    you copy example code or read docs, match them to **v6.x**, not v5.
+  - v6.0 is a major bump with breaking API changes from v5 — when you copy
+    example code or read docs, match them to **v6.x**, not v5.
 - There is a second, stray checkout at `~/esp/esp-idf/`. Ignore it. Use only
   the EIM-managed `~/.espressif/v6.0.2/esp-idf/`. Two IDF installs on one
   machine is how you waste an afternoon building against the wrong one.
@@ -91,9 +90,15 @@ Exit the monitor with **Ctrl-]**.
 
 ## Notes
 
-- `hello_world` is a disposable setup check. The real firmware — the
-  `minicole-monocle` BLE peripheral — goes in `firmware/`, scaffolded from
-  the `bleprph` NimBLE example. See `firmware-plan.md` milestone 1.
+- `hello_world` and the copies under `ble-examples/` are disposable setup
+  checks. The real firmware — the `minicole-monocle` peripheral — goes in
+  `firmware/`, scaffolded from the `bleprph` NimBLE example. See
+  `firmware-plan.md` milestone 2.
+- Copied examples default to target `esp32`. On the XIAO you must run `idf.py
+  set-target esp32s3` **before** the first build, or flashing fails with
+  `This chip is ESP32-S3, not ESP32`. `set-target` also resets `sdkconfig` to
+  defaults — put anything you set in menuconfig into `sdkconfig.defaults` so
+  it survives.
 - Every command above assumes `export.sh` was sourced in the current
   terminal. If `idf.py: command not found`, that's the reason.
 

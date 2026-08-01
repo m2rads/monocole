@@ -131,18 +131,36 @@ command palette (⌘⇧P), but changing the clangd *binary* needs a full quit
 
 ## 4. The architecture: BLE control plane + Wi-Fi data plane
 
-Decision: **skip the BLE-only-data v1**. BLE manages the connection and
-bootstraps Wi-Fi; **Wi-Fi carries the heavy data**.
+> **The decision now lives in [firmware-plan.md](firmware-plan.md) and the wire
+> contract in [protocol.md](protocol.md).** This section is the concepts
+> behind them. When the architecture changes, change those two — this drifted
+> out of sync with the plan once already.
+
+Shape of it: **skip the BLE-only-data v1.** BLE manages the connection and
+bootstraps Wi-Fi; Wi-Fi carries the heavy data.
 
 - **BLE = control plane (always on).** App scans, connects, manages session.
   Also the bootstrap channel: app writes Wi-Fi SSID/password to a
   characteristic; firmware writes its assigned IP + "ready" back. Stays
   connected for control/signaling.
 - **Wi-Fi = data plane.** Firmware brings up `esp_wifi`, opens a socket
-  server (TCP/WebSocket); app connects to the IP; bulk data flows there.
+  server; app connects to the IP; bulk data flows there.
 - **Handoff replaces BluFi:** BLE connect → app writes creds → firmware
   joins Wi-Fi, gets IP → firmware reports IP over BLE → app opens socket.
   BLE stays up throughout.
+
+**Later refinement — split by traffic shape, not by role.** "All media on
+Wi-Fi" was the first cut, but the two media types have opposite profiles, and
+on a battery-powered head-worn device that matters more than uniformity:
+
+- *Voice* is continuous but only ~64 kbps. Wi-Fi would hold a 100–200 mA radio
+  up for an entire utterance to move a trickle. It stays on **BLE**, whose
+  radio is up anyway.
+- *Images* are 30–100 KB bursts — the one thing BLE is genuinely bad at
+  (1–3 s each). They go over **Wi-Fi**, which then powers back down.
+
+Net effect: Wi-Fi duty cycle ~1% instead of "up whenever the user is talking."
+The lesson generalizes — pick the radio per traffic profile, not per subsystem.
 
 ### BluFi — evaluated and dropped
 - BluFi = Espressif's protocol for provisioning Wi-Fi creds over BLE. It
@@ -234,10 +252,10 @@ deeper than `blufi`, which sits at the top of `examples/bluetooth/`. (Exact
 folder contents shift between IDF versions — list your own install to
 confirm names.)
 
-1. **`bleprph`** — read first. Connectable peripheral + GATT service +
-   characteristics + security. The monocle's actual skeleton; where the
-   desktop app can finally connect (`ble.rs` scan → connect). Characteristics
-   = Wi-Fi cred write + IP/status read.
+1. **`bleprph`** — **done.** Connectable peripheral + GATT service +
+   characteristics + security. The monocle's actual skeleton; the desktop app
+   connects to the stock example unmodified (`ble.rs` scan → connect needed no
+   changes). Characteristics = Wi-Fi cred write + IP/status read.
 2. **`blehr`** — second. Peripheral pushing data via **notifications** on a
    timer. Ignore the heart-rate specifics; the mechanism is how the monocle
    streams voice/events out to the app.
@@ -246,9 +264,9 @@ confirm names.)
    skim `wifi_provisioning/wifi_prov_mgr` to see Espressif's built-in
    BLE-based provisioning before committing to the custom handoff.
 
-Path: **beacon (done)** → **`bleprph`** → **`blehr`** → **Wi-Fi station +
-TCP server**. Don't jump ahead to Wi-Fi; `bleprph` is the foundation and the
-first real end-to-end test against the minicole app.
+Path: **beacon (done)** → **`bleprph` (done)** → **`blehr`** → **Wi-Fi station
++ TCP server**. `blehr` is next: its notify-on-a-timer mechanism is what the
+voice path (milestone 3) and the `wifi_state` IP report both need.
 
 ---
 
