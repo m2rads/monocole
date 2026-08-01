@@ -21,7 +21,8 @@ type BleSnapshot = {
 }
 
 type StatusEvent = {
-  kind: "scanning" | "scanStopped" | "connected" | "disconnected" | "bluetoothOff"
+  kind:
+    "scanning" | "scanStopped" | "connected" | "disconnected" | "bluetoothOff"
   deviceId?: string
   name?: string | null
   reason?: "timeout"
@@ -37,9 +38,7 @@ type DeviceEvent = {
 
 export function useBle() {
   const [scanning, setScanning] = React.useState(false)
-  const [connected, setConnected] = React.useState<ConnectedDevice | null>(
-    null
-  )
+  const [connected, setConnected] = React.useState<ConnectedDevice | null>(null)
   const [devices, setDevices] = React.useState<
     Record<string, DiscoveredDevice>
   >({})
@@ -59,7 +58,12 @@ export function useBle() {
       const { id, name, rssi } = event.payload
       setDevices((prev) => ({
         ...prev,
-        [id]: { id, name: name ?? prev[id]?.name ?? null, rssi, lastSeen: Date.now() },
+        [id]: {
+          id,
+          name: name ?? prev[id]?.name ?? null,
+          rssi,
+          lastSeen: Date.now(),
+        },
       }))
     })
     const unlistenStatus = listen<StatusEvent>("ble-status", (event) => {

@@ -66,14 +66,20 @@ describe("useSessions", () => {
 
   it("generates an AI title after the first completed exchange", async () => {
     invokeMock.mockImplementation(async (cmd) =>
-      cmd === "generate_session_title" ? ("Greeting Chat" as never) : (undefined as never)
+      cmd === "generate_session_title"
+        ? ("Greeting Chat" as never)
+        : (undefined as never)
     )
     const { result } = renderHook(() => useSessions(), { wrapper })
 
     act(() => result.current.sendMessage("Hello"))
     const sessionId = lastChatStreamArgs().sessionId
     act(() => {
-      emitTauriEvent("chat-stream", { sessionId, kind: "token", content: "Hey" })
+      emitTauriEvent("chat-stream", {
+        sessionId,
+        kind: "token",
+        content: "Hey",
+      })
       emitTauriEvent("chat-stream", { sessionId, kind: "done" })
     })
     await flushTimers()
@@ -97,7 +103,11 @@ describe("useSessions", () => {
     act(() => result.current.sendMessage("First"))
     const sessionId = lastChatStreamArgs().sessionId
     act(() => {
-      emitTauriEvent("chat-stream", { sessionId, kind: "token", content: "Reply" })
+      emitTauriEvent("chat-stream", {
+        sessionId,
+        kind: "token",
+        content: "Reply",
+      })
       emitTauriEvent("chat-stream", { sessionId, kind: "done" })
     })
     await flushTimers()

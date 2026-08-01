@@ -80,7 +80,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
   const requestTitle = React.useCallback(
     (sessionId: string) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId)
-      if (!session || session.titled || titleRequestsRef.current.has(sessionId)) {
+      if (
+        !session ||
+        session.titled ||
+        titleRequestsRef.current.has(sessionId)
+      ) {
         return
       }
       const firstUser = session.messages.find((m) => m.role === "user")

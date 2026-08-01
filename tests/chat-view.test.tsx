@@ -25,7 +25,9 @@ describe("ChatView", () => {
     renderChat()
 
     expect(screen.getByText("Welcome to Minicole")).toBeInTheDocument()
-    expect(screen.getByPlaceholderText("How can I help you?")).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText("How can I help you?")
+    ).toBeInTheDocument()
   })
 
   it("sends a message on Enter and renders streamed tokens", async () => {
@@ -44,8 +46,16 @@ describe("ChatView", () => {
 
     const sessionId = sessionIdFromLastCall()
     act(() => {
-      emitTauriEvent("chat-stream", { sessionId, kind: "token", content: "Hi " })
-      emitTauriEvent("chat-stream", { sessionId, kind: "token", content: "back" })
+      emitTauriEvent("chat-stream", {
+        sessionId,
+        kind: "token",
+        content: "Hi ",
+      })
+      emitTauriEvent("chat-stream", {
+        sessionId,
+        kind: "token",
+        content: "back",
+      })
     })
     expect(screen.getByText("Hi back")).toBeInTheDocument()
   })

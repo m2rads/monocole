@@ -11,7 +11,8 @@ export type LocalModel = {
   partial: boolean
 }
 
-export type DownloadStatus = "downloading" | "completed" | "cancelled" | "failed"
+export type DownloadStatus =
+  "downloading" | "completed" | "cancelled" | "failed"
 
 export type DownloadState = {
   status: DownloadStatus
@@ -37,7 +38,9 @@ export function useModels() {
   }, [])
 
   React.useEffect(() => {
-    getModelManifest().then(setManifest).catch((err) => setError(String(err)))
+    getModelManifest()
+      .then(setManifest)
+      .catch((err) => setError(String(err)))
     refresh().catch((err) => setError(String(err)))
 
     const unlisten = listen<DownloadEvent>("model-download", (event) => {
@@ -86,17 +89,14 @@ export function useModels() {
     [refresh]
   )
 
-  const setActive = React.useCallback(
-    async (file: string | null) => {
-      try {
-        await invoke("set_active_model", { file })
-        setActiveFile(file)
-      } catch (err) {
-        setError(String(err))
-      }
-    },
-    []
-  )
+  const setActive = React.useCallback(async (file: string | null) => {
+    try {
+      await invoke("set_active_model", { file })
+      setActiveFile(file)
+    } catch (err) {
+      setError(String(err))
+    }
+  }, [])
 
   return {
     manifest,

@@ -10,7 +10,11 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { useModels, type DownloadState, type LocalModel } from "@/hooks/use-models"
+import {
+  useModels,
+  type DownloadState,
+  type LocalModel,
+} from "@/hooks/use-models"
 import type { ModelEntry } from "@/lib/model-manifest"
 import { CheckIcon, Trash2Icon, XIcon } from "lucide-react"
 
@@ -33,7 +37,9 @@ export function ModelsView() {
   } = useModels()
 
   const manifestIds = new Set(manifest?.models.map((entry) => entry.id) ?? [])
-  const manifestFiles = new Set(manifest?.models.map((entry) => entry.file) ?? [])
+  const manifestFiles = new Set(
+    manifest?.models.map((entry) => entry.file) ?? []
+  )
   // URL downloads are keyed by file name; while one is in flight its stale
   // partial may still be in `locals`, so hide it from the local list.
   const customDownloads = Object.entries(downloads).filter(
@@ -51,8 +57,8 @@ export function ModelsView() {
         <div>
           <h2 className="text-sm font-medium">Models</h2>
           <p className="text-sm text-muted-foreground">
-            Download a model to run inference locally. The active model is
-            used for new sessions.
+            Download a model to run inference locally. The active model is used
+            for new sessions.
           </p>
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -73,7 +79,11 @@ export function ModelsView() {
                 {file}
               </CardTitle>
               <CardAction>
-                <Button variant="outline" size="xs" onClick={() => cancel(file)}>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => cancel(file)}
+                >
                   <XIcon data-icon="inline-start" />
                   Cancel
                 </Button>
@@ -133,8 +143,7 @@ function AddModelFromUrl({
       <CardHeader>
         <CardTitle>Add from URL</CardTitle>
         <CardDescription>
-          Paste a direct link to a .gguf file, e.g. a Hugging Face download
-          URL.
+          Paste a direct link to a .gguf file, e.g. a Hugging Face download URL.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
