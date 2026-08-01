@@ -1,8 +1,13 @@
 # Firmware plan
 
-Decisions made 2026-07-05. Board: Seeed XIAO ESP32-S3 Sense (camera + PDM
-mic), driving a micro-LED display. The board may change; these decisions
-assume any ESP32-S3-class part.
+Board: Seeed XIAO ESP32-S3 Sense (camera + PDM mic), driving a micro-LED
+display. The board may change; these decisions assume any ESP32-S3-class part.
+
+Decisions first made 2026-07-05; transport revised 2026-08-01 (see
+[Transport](#transport-ble-control-plane--wi-fi-data-plane) — the original
+BLE-only v1 was dropped). The wire contract lives in
+[protocol.md](protocol.md); build mechanics in
+[firmware-setup.md](firmware-setup.md).
 
 ## Language & toolchain: C++ on ESP-IDF
 
@@ -12,54 +17,94 @@ concurrently on a 240 MHz chip — is exactly what MicroPython is bad at. The
 camera driver alone needs a custom MicroPython build, and streaming audio
 hits the interpreter's performance ceiling immediately.
 
-**ESP-IDF v5.x directly** (not the Arduino framework). We will need its
-control anyway: NimBLE stack tuning (MTU, connection interval, 2M PHY), I2S
-DMA for the mic, the `esp32-camera` component, OTA updates later. Arduino
-would only be a temporary on-ramp we'd migrate off.
+**ESP-IDF v6.0.2** (not the Arduino framework). We need its control anyway:
+NimBLE stack tuning (MTU, connection interval, 2M PHY), I2S DMA for the mic,
+the `esp32-camera` component, `esp_wifi`, OTA updates later. Arduino would only
+be a temporary on-ramp we'd migrate off.
 
-Tooling: `idf.py` CLI + ESP-IDF VS Code extension. Firmware lives in
-`firmware/` in this repo so protocol constants stay next to the app that
-consumes them.
+Match examples and docs to **v6.x**. v6.0 is a major bump with breaking API
+changes from v5, and much of what you'll find online targets v5.
 
-## Transport: BLE-only v1, Wi-Fi media plane later
+**NimBLE, not Bluedroid** — BLE-only design, and the smaller footprint matters
+alongside audio, JPEG, and Wi-Fi buffers.
 
-**Raw footage over BLE is impossible — and unnecessary.** Tuned BLE on an
-ESP32-S3 sustains roughly 200–400 kbps real-world. Raw 16 kHz/16-bit audio
-is already 256 kbps; live video is megabits. But the consumer of "video" is
-a multimodal LLM (e.g. Gemma 3) that takes **still images**, not streams.
-The product flow is: user speaks; optionally a snapshot of what they're
-looking at goes along with the query.
+Tooling: `idf.py` CLI. Firmware lives in `firmware/` in this repo so protocol
+constants stay next to the app that consumes them.
 
-v1 (BLE only — matches the app's Connection tab and `ble.rs`):
+## Transport: BLE control plane + Wi-Fi data plane
 
-- **Voice**: 16 kHz mono, IMA ADPCM compressed on-device (4:1 → ~64 kbps).
-  Whisper is happy with 16 kHz input.
-- **Images**: on-demand JPEG stills (QVGA/VGA, quality ~12), chunked over
-  BLE notifications. Expect 1–3 s per capture — acceptable for v1.
-- **Tokens back to the monocle display**: BLE notify; trivial bandwidth.
+Split by **traffic shape**, chosen for battery life on a head-worn device.
+Full wire details in [protocol.md](protocol.md).
 
-v2 (hybrid, when still latency / audio quality becomes limiting): BLE stays
-as the pairing/control plane; the ESP32 joins Wi-Fi and opens a WebSocket to
-a listener in the desktop app for the media plane. BLE hands over the
-address/credentials. Standard wearable pattern — grow into it, don't start
-with two radios' worth of firmware complexity.
+- **BLE, always on** — control, status, tokens to the display, and **voice**
+  (16 kHz mono, IMA ADPCM, ~64 kbps). Voice is continuous but low-rate, and
+  fits inside BLE's ~200 kbps budget on a radio that is already up.
+- **Wi-Fi, on demand** — **JPEG stills only**. Brought up for a burst, torn
+  down after an idle timeout. ~100 KB in tens of milliseconds instead of the
+  1–3 s the same image costs over BLE.
 
-## Throughput essentials (firmware side)
+The handoff replaces BluFi: the app writes credentials to a BLE
+characteristic, the firmware joins and reports its DHCP address back over BLE,
+the app opens a TCP socket. BLE stays connected throughout.
+
+**Raw footage is out of scope.** The consumer of imagery is a multimodal LLM
+that takes still frames, not streams. The product flow is: user speaks;
+optionally a snapshot of what they're looking at goes along with the query.
+
+### Rejected alternatives
+
+- **BLE-only v1** (the original plan). Images were always its weak point at
+  1–3 s per capture, and the Wi-Fi radio was sitting idle on the same chip.
+- **All media over Wi-Fi** (the first revision). Uniform, but holds a
+  100–200 mA radio up for every spoken utterance to carry 64 kbps. Voice on
+  BLE keeps Wi-Fi's duty cycle near ~1%.
+- **ESP-NOW** as the data plane. Lower overhead than Wi-Fi + TCP and needs no
+  router, but a Mac cannot speak it without an ESP32 dongle.
+- **BluFi.** Provisions credentials only — no data channel, so you open your
+  own socket regardless. Assumes Espressif's *mobile* apps and pulls in
+  Bluedroid. We own both sides; a custom characteristic is simpler.
+- **SoftAP** as the initial topology. Deferred, not rejected — the Mac loses
+  its own internet while connected. Same data-plane code either way.
+
+## Throughput essentials
 
 - Negotiate MTU 517, request 2M PHY, short connection interval (~15 ms).
-- Stream notifications from a dedicated FreeRTOS task fed by ring buffers
-  off the I2S/camera DMA — never from callbacks.
-- Design against a conservative ~200 kbps sustained budget.
+- Stream notifications from a dedicated FreeRTOS task fed by ring buffers off
+  the I2S/camera DMA — never from callbacks.
+- Design BLE against a conservative ~200 kbps sustained budget. Voice uses
+  roughly a third, which is why a dedicated BLE throughput test is no longer a
+  gating milestone: the headroom is large now that images have moved off. It
+  reduces to a check inside milestone 3.
 
 ## Milestones
 
-1. **Advertise + connect**: firmware advertises as `minicole-monocle`;
-   connect from the app's Connection tab. Proves the pairing path.
-2. **Throughput test**: flood notifications, measure real kbps on the Mac
-   *before* freezing the protocol. This measurement de-risks everything.
-3. **Audio path**: mic → ADPCM → notify → app writes a WAV to disk.
-4. **Photo path**: capture command → chunked JPEG → app saves it.
-5. **Full loop**: audio → STT → llama.cpp → tokens → monocle display.
+1. ~~**Advertise + connect**~~ — **done.** The stock `bleprph` example builds,
+   flashes, advertises, and the app's Connection tab connects to it. Proves the
+   pairing path end to end; no app-side changes were needed.
+2. **GATT skeleton** — scaffold `firmware/` from `bleprph`: advertise as
+   `minicole-monocle`, define the real service and characteristics from
+   protocol.md, enable bonding with keys in NVS. App side: freeze the UUIDs and
+   add a `ScanFilter`.
+3. **Voice path** — mic → I2S DMA → ADPCM → BLE notify → app writes a WAV to
+   disk. Confirm sustained 64 kbps holds without drops (absorbs the old
+   throughput test).
+4. **Wi-Fi handoff** — creds write → join → report IP over BLE → app opens a
+   TCP socket → echo test. Verify the radio actually powers down on idle.
+5. **Photo path** — capture command over BLE `control` → JPEG over the socket →
+   app verifies CRC and saves it.
+6. **Full loop** — voice → STT → llama.cpp → tokens → monocle display.
 
-App-side counterparts are marked `TODO(monocle-protocol)` and
-`TODO(auto-reconnect)` in `src-tauri/src/ble.rs`.
+Milestones 2–5 each need new Rust in `src-tauri/src/ble.rs`, which today does
+scan/connect/disconnect and nothing past service discovery — see
+`TODO(monocle-protocol)` and `TODO(auto-reconnect)` there. Milestone 4 also
+introduces the app's first TCP client; milestone 6 depends on the STT stage,
+which has not been started.
+
+## Hardware config still to enable
+
+Both known and both deferred (see firmware-learning-notes.md open threads):
+
+- **8 MB flash** — the XIAO S3 has 8 MB but builds default to 2 MB. Set before
+  building a real partition table; OTA and Wi-Fi will want the space.
+- **PSRAM** — not yet enabled. Turn on before BLE + Wi-Fi + audio + camera
+  buffers coexist.
