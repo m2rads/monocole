@@ -49,14 +49,55 @@ static const ble_uuid128_t gatt_svr_chr_sec_test_static_uuid =
     BLE_UUID128_INIT(0xf7, 0x6d, 0xc9, 0x07, 0x71, 0x00, 0x16, 0xb0,
                      0xe1, 0x45, 0x7e, 0x89, 0x9e, 0x65, 0x3a, 0x5c);
 
+/*
+ * Monocle Wi-Fi provisioning service.
+ *
+ * The desktop app writes the credentials of the network it wants the monocle
+ * to join, and the monocle reports its join progress (and, on success, the
+ * address the app should open a socket to) back over a notification.
+ *
+ * These UUIDs are the contract with src-tauri/src/ble.rs — see
+ * docs/protocol.md. BLE_UUID128_INIT takes bytes in wire order, which is the
+ * reverse of how the UUID is written in the comment above each one.
+ */
+
+/* 83486508-636c-4260-9119-c0ccc2004219 */
+static const ble_uuid128_t gatt_svr_svc_monocle_uuid =
+    BLE_UUID128_INIT(0x19, 0x42, 0x00, 0xc2, 0xcc, 0xc0, 0x19, 0x91,
+                     0x60, 0x42, 0x6c, 0x63, 0x08, 0x65, 0x48, 0x83);
+
+/* 2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c — app writes credentials here. */
+static const ble_uuid128_t gatt_svr_chr_wifi_creds_uuid =
+    BLE_UUID128_INIT(0x3c, 0xdb, 0x98, 0x2e, 0x5f, 0x1f, 0x60, 0xac,
+                     0xf9, 0x4b, 0xa5, 0xd3, 0x45, 0x4a, 0x9b, 0x2c);
+
+/* 1ad1e743-dcae-422d-a7a8-68b4d695ac8b — device notifies join state here. */
+static const ble_uuid128_t gatt_svr_chr_wifi_state_uuid =
+    BLE_UUID128_INIT(0x8b, 0xac, 0x95, 0xd6, 0xb4, 0x68, 0xa8, 0xa7,
+                     0x2d, 0x42, 0xae, 0xdc, 0x43, 0xe7, 0xd1, 0x1a);
+
 static const char* TAG = "wifi_prph_coex";
 
 static uint8_t gatt_svr_sec_test_static_val;
+
+/* NimBLE fills this in during registration; notifications are addressed to
+ * the value handle, not the declaration handle. */
+static uint16_t gatt_svr_chr_wifi_state_handle;
+
+/* The connection we notify on, and whether its client has subscribed.
+ * BLE_HS_CONN_HANDLE_NONE means "not connected". */
+static uint16_t gatt_svr_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static bool gatt_svr_wifi_state_subscribed;
 
 static int
 gatt_svr_chr_access_sec_test(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt,
                              void *arg);
+
+static int
+gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
+                         struct ble_gatt_access_ctxt *ctxt,
+                         void *arg);
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
     {
@@ -75,6 +116,35 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .access_cb = gatt_svr_chr_access_sec_test,
                 .flags = BLE_GATT_CHR_F_READ |
                 BLE_GATT_CHR_F_WRITE
+            }, {
+                0, /* No more characteristics in this service. */
+            }
+        },
+    },
+
+    {
+        /*** Service: Monocle Wi-Fi provisioning. */
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &gatt_svr_svc_monocle_uuid.u,
+        .characteristics = (struct ble_gatt_chr_def[])
+        { {
+                /*** Characteristic: Wi-Fi credentials (app -> device).
+                 *
+                 * WRITE_ENC is what keeps the passphrase off the air in
+                 * cleartext: NimBLE refuses the write, and starts pairing,
+                 * unless the link is already encrypted. It depends on bonding
+                 * being enabled (CONFIG_EXAMPLE_BONDING).
+                 */
+                .uuid = &gatt_svr_chr_wifi_creds_uuid.u,
+                .access_cb = gatt_svr_chr_access_wifi,
+                .flags = BLE_GATT_CHR_F_WRITE |
+                BLE_GATT_CHR_F_WRITE_ENC
+            }, {
+                /*** Characteristic: Wi-Fi join state (device -> app). */
+                .uuid = &gatt_svr_chr_wifi_state_uuid.u,
+                .access_cb = gatt_svr_chr_access_wifi,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &gatt_svr_chr_wifi_state_handle
             }, {
                 0, /* No more characteristics in this service. */
             }
@@ -155,6 +225,139 @@ gatt_svr_chr_access_sec_test(uint16_t conn_handle, uint16_t attr_handle,
      */
     assert(0);
     return BLE_ATT_ERR_UNLIKELY;
+}
+
+/**
+ * Handles access to the Wi-Fi provisioning characteristics.
+ *
+ * Only wifi_creds is ever reached: wifi_state is notify-only, so the stack
+ * has nothing to ask us about it.
+ *
+ * The write payload is [ssid_len:u8][ssid][pass_len:u8][pass]. Worst case is
+ * 97 bytes, which fits in a single ATT write at any MTU macOS negotiates, so
+ * there is no reassembly to do here.
+ */
+static int
+gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
+                         struct ble_gatt_access_ctxt *ctxt,
+                         void *arg)
+{
+    uint8_t buf[1 + MONOCLE_SSID_MAX_LEN + 1 + MONOCLE_PASS_MAX_LEN];
+    char ssid[MONOCLE_SSID_MAX_LEN + 1];
+    char pass[MONOCLE_PASS_MAX_LEN + 1];
+    struct ble_gap_conn_desc desc;
+    uint8_t ssid_len, pass_len;
+    uint16_t len;
+    int rc;
+
+    if (ble_uuid_cmp(ctxt->chr->uuid, &gatt_svr_chr_wifi_creds_uuid.u) != 0 ||
+        ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    /* Defence in depth. BLE_GATT_CHR_F_WRITE_ENC should already guarantee an
+     * encrypted link, but a Wi-Fi passphrase is worth confirming rather than
+     * trusting a single flag in a table far from here. */
+    rc = ble_gap_conn_find(conn_handle, &desc);
+    if (rc != 0 || !desc.sec_state.encrypted) {
+        ESP_LOGW(TAG, "rejected credential write on an unencrypted link");
+        return BLE_ATT_ERR_INSUFFICIENT_ENC;
+    }
+
+    /* Shortest legal message is a 1-byte SSID with an empty passphrase. */
+    rc = gatt_svr_chr_write(ctxt->om, 3, sizeof buf, buf, &len);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* Every offset below is computed from bytes a remote device chose, so each
+     * is checked against the length actually received before being used. */
+    ssid_len = buf[0];
+    if (ssid_len == 0 || ssid_len > MONOCLE_SSID_MAX_LEN ||
+        len < 2 + ssid_len) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    pass_len = buf[1 + ssid_len];
+    if (pass_len > MONOCLE_PASS_MAX_LEN || len < 2 + ssid_len + pass_len) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    memcpy(ssid, &buf[1], ssid_len);
+    ssid[ssid_len] = '\0';
+    memcpy(pass, &buf[2 + ssid_len], pass_len);
+    pass[pass_len] = '\0';
+
+    /* Log the network but never the passphrase. */
+    ESP_LOGI(TAG, "credentials received for SSID \"%s\" (%u-byte key)",
+             ssid, pass_len);
+
+    rc = wifi_prov_connect(ssid, pass);
+
+    /* Don't leave the passphrase lying in stack memory after we're done. */
+    memset(buf, 0, sizeof buf);
+    memset(pass, 0, sizeof pass);
+
+    return rc == 0 ? 0 : BLE_ATT_ERR_UNLIKELY;
+}
+
+void
+gatt_svr_on_connect(uint16_t conn_handle)
+{
+    gatt_svr_conn_handle = conn_handle;
+}
+
+void
+gatt_svr_on_disconnect(void)
+{
+    gatt_svr_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    gatt_svr_wifi_state_subscribed = false;
+}
+
+void
+gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
+                      int cur_notify)
+{
+    if (attr_handle == gatt_svr_chr_wifi_state_handle) {
+        gatt_svr_conn_handle = conn_handle;
+        gatt_svr_wifi_state_subscribed = cur_notify != 0;
+    }
+}
+
+void
+gatt_svr_notify_wifi_state(uint8_t state, const void *extra, uint8_t extra_len)
+{
+    uint8_t payload[1 + 4];   /* state byte + the widest extra we send (IPv4) */
+    struct os_mbuf *om;
+    int rc;
+
+    if (gatt_svr_conn_handle == BLE_HS_CONN_HANDLE_NONE ||
+        !gatt_svr_wifi_state_subscribed) {
+        return;
+    }
+
+    if (extra_len > sizeof payload - 1) {
+        ESP_LOGE(TAG, "wifi_state extra too long (%u)", extra_len);
+        return;
+    }
+
+    payload[0] = state;
+    if (extra_len > 0) {
+        memcpy(&payload[1], extra, extra_len);
+    }
+
+    /* ble_gatts_notify_custom consumes the mbuf, including on failure. */
+    om = ble_hs_mbuf_from_flat(payload, 1 + extra_len);
+    if (om == NULL) {
+        ESP_LOGE(TAG, "out of mbufs; dropped wifi_state notification");
+        return;
+    }
+
+    rc = ble_gatts_notify_custom(gatt_svr_conn_handle,
+                                 gatt_svr_chr_wifi_state_handle, om);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "wifi_state notify failed; rc=%d", rc);
+    }
 }
 
 void

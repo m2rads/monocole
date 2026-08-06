@@ -17,6 +17,7 @@
 
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 /* BLE */
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -44,116 +45,238 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 
-#define EXAMPLE_ESP_WIFI_SSID      CONFIG_EXAMPLE_ESP_WIFI_SSID
-#define EXAMPLE_ESP_WIFI_PASS      CONFIG_EXAMPLE_ESP_WIFI_PASSWORD
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_EXAMPLE_ESP_MAXIMUM_RETRY
 #define EXAMPLE_PING_IP            CONFIG_EXAMPLE_ESP_PING_IP
 #define EXAMPLE_PING_COUNT         CONFIG_EXAMPLE_ESP_PING_COUNT
 #define EXAMPLE_PING_INTERVAL      1
 
+/* Where remembered credentials live, so a reboot doesn't need the app. */
+#define MONOCLE_NVS_NAMESPACE      "monocle"
+#define MONOCLE_NVS_KEY_SSID       "wifi_ssid"
+#define MONOCLE_NVS_KEY_PASS       "wifi_pass"
+
 static int bleprph_gap_event(struct ble_gap_event *event, void *arg);
 static uint8_t own_addr_type;
-
-/* FreeRTOS event group to signal when we are connected*/
-static EventGroupHandle_t s_wifi_event_group;
-
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+static void ping_task(void *arg);
 
 static const char *TAG = "wifi_prph_coex";
 
 static int s_retry_num = 0;
 
+/* esp_wifi_start() has run, so connect requests can be served. */
+static bool s_wifi_started;
+
+/* Set once credentials have been supplied. Until then a disconnect event is
+ * not something to retry — we simply have nothing to connect to. */
+static bool s_provisioned;
+
+/* The credentials currently being tried. Kept so they can be persisted once
+ * they are known to work, and reused for reconnects. */
+static char s_ssid[MONOCLE_SSID_MAX_LEN + 1];
+static char s_pass[MONOCLE_PASS_MAX_LEN + 1];
+
+/**
+ * Persists the working credentials.
+ *
+ * NOTE(security): NVS is not encrypted unless flash encryption is enabled for
+ * the device. Until it is, anyone with physical access and a flash reader can
+ * recover this passphrase. Enable flash encryption before shipping hardware.
+ */
+static void
+wifi_creds_save(const char *ssid, const char *pass)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(MONOCLE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_open failed; credentials not saved (err=%d)", err);
+        return;
+    }
+
+    if (nvs_set_str(handle, MONOCLE_NVS_KEY_SSID, ssid) != ESP_OK ||
+        nvs_set_str(handle, MONOCLE_NVS_KEY_PASS, pass) != ESP_OK ||
+        nvs_commit(handle) != ESP_OK) {
+        ESP_LOGW(TAG, "failed to persist credentials");
+    } else {
+        ESP_LOGI(TAG, "credentials saved for SSID \"%s\"", ssid);
+    }
+
+    nvs_close(handle);
+}
+
+/**
+ * Loads remembered credentials. Returns true when both were present.
+ */
+static bool
+wifi_creds_load(char *ssid, size_t ssid_size, char *pass, size_t pass_size)
+{
+    nvs_handle_t handle;
+    bool loaded = false;
+
+    if (nvs_open(MONOCLE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+        return false;
+    }
+
+    /* nvs_get_str writes the size it used back through the same pointer, so
+     * each call needs its own copy of the buffer size. */
+    size_t ssid_len = ssid_size;
+    size_t pass_len = pass_size;
+    loaded = nvs_get_str(handle, MONOCLE_NVS_KEY_SSID, ssid, &ssid_len) == ESP_OK &&
+             nvs_get_str(handle, MONOCLE_NVS_KEY_PASS, pass, &pass_len) == ESP_OK;
+
+    nvs_close(handle);
+    return loaded;
+}
+
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        /* Deliberately does not connect. The radio is up but idle until the
+         * app provisions a network over BLE (or stored credentials load). */
+        ESP_LOGI(TAG, "wifi station started; idle until provisioned");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
-        } else {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        wifi_event_sta_disconnected_t *disc =
+            (wifi_event_sta_disconnected_t *) event_data;
+
+        if (!s_provisioned) {
+            return;
         }
-        ESP_LOGI(TAG,"connect to the AP fail");
+
+        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+            s_retry_num++;
+            ESP_LOGI(TAG, "connect failed (reason=%d); retry %d/%d",
+                     disc->reason, s_retry_num, EXAMPLE_ESP_MAXIMUM_RETRY);
+            esp_wifi_connect();
+        } else {
+            uint8_t reason = disc->reason;
+            ESP_LOGW(TAG, "giving up on SSID \"%s\"; reason=%d",
+                     s_ssid, disc->reason);
+            s_provisioned = false;
+            gatt_svr_notify_wifi_state(MONOCLE_WIFI_FAILED, &reason,
+                                       sizeof reason);
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        uint8_t octets[4] = {
+            (uint8_t) esp_ip4_addr1_16(&event->ip_info.ip),
+            (uint8_t) esp_ip4_addr2_16(&event->ip_info.ip),
+            (uint8_t) esp_ip4_addr3_16(&event->ip_info.ip),
+            (uint8_t) esp_ip4_addr4_16(&event->ip_info.ip),
+        };
+
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
+        /* Only persist credentials that actually worked. */
+        wifi_creds_save(s_ssid, s_pass);
+
+        gatt_svr_notify_wifi_state(MONOCLE_WIFI_CONNECTED, octets,
+                                   sizeof octets);
+
+        /* Reachability check, on its own task: the ping helper can block on
+         * name resolution and this is the shared event-loop task. */
+        xTaskCreate(ping_task, "monocle_ping", 4096, NULL, 5, NULL);
     }
 }
 
-void wifi_init_sta(void)
+/**
+ * Brings the Wi-Fi driver up without connecting to anything.
+ *
+ * Unlike the stock example this returns immediately, so BLE can start
+ * advertising and accept the credentials that decide what we join.
+ */
+static void wifi_prov_init(void)
 {
-    s_wifi_event_group = xEventGroupCreate();
-
     ESP_ERROR_CHECK(esp_netif_init());
-
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &event_handler,
                                                         NULL,
-                                                        &instance_any_id));
+                                                        NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                                                         IP_EVENT_STA_GOT_IP,
                                                         &event_handler,
                                                         NULL,
-                                                        &instance_got_ip));
+                                                        NULL));
 
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = EXAMPLE_ESP_WIFI_SSID,
-            .password = EXAMPLE_ESP_WIFI_PASS,
-            /* Setting a password implies station will connect to all security modes including WEP/WPA.
-             * However these modes are deprecated and not advisable to be used. In case your Access point
-             * doesn't support WPA2, these mode can be enabled by commenting below line */
-             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_start() );
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    s_wifi_started = true;
 
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
+    ESP_LOGI(TAG, "wifi driver started; awaiting credentials over BLE");
+}
 
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
+/**
+ * Joins the given network. Called from the GATT write handler once the
+ * payload has been validated, and at boot for remembered credentials.
+ *
+ * Returns 0 if the attempt was started; progress arrives asynchronously as
+ * wifi_state notifications.
+ */
+int wifi_prov_connect(const char *ssid, const char *pass)
+{
+    wifi_config_t wifi_config = { 0 };
+    esp_err_t err;
 
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+    if (!s_wifi_started) {
+        ESP_LOGE(TAG, "connect requested before the wifi driver was up");
+        return -1;
     }
 
-    /* The event will not be processed after unregister */
-    ESP_ERROR_CHECK(esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_got_ip));
-    ESP_ERROR_CHECK(esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_any_id));
-    vEventGroupDelete(s_wifi_event_group);
+    /* Both strings are already length-validated by the caller; the config
+     * fields are fixed-size, and esp_wifi accepts them unterminated when
+     * full. */
+    strncpy((char *) wifi_config.sta.ssid, ssid, sizeof wifi_config.sta.ssid);
+    strncpy((char *) wifi_config.sta.password, pass,
+            sizeof wifi_config.sta.password);
+
+    /* An empty passphrase means an open network. Demanding WPA2 there would
+     * fail to match any AP at all. */
+    wifi_config.sta.threshold.authmode =
+        (pass[0] == '\0') ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+
+    /* Keep our own copy for persistence and reconnects. */
+    strlcpy(s_ssid, ssid, sizeof s_ssid);
+    strlcpy(s_pass, pass, sizeof s_pass);
+
+    s_retry_num = 0;
+    s_provisioned = true;
+
+    /* Drop any existing association first. This raises a disconnect event,
+     * which the handler turns into one retry — harmless, because the new
+     * config is already in place by then. */
+    esp_wifi_disconnect();
+
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed; err=%d", err);
+        s_provisioned = false;
+        memset(&wifi_config, 0, sizeof wifi_config);
+        return -1;
+    }
+
+    ESP_LOGI(TAG, "joining SSID \"%s\"", ssid);
+    gatt_svr_notify_wifi_state(MONOCLE_WIFI_CONNECTING, NULL, 0);
+
+    err = esp_wifi_connect();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
+        ESP_LOGE(TAG, "esp_wifi_connect failed; err=%d", err);
+        s_provisioned = false;
+        memset(&wifi_config, 0, sizeof wifi_config);
+        return -1;
+    }
+
+    /* Don't leave a second copy of the passphrase on the stack. */
+    memset(&wifi_config, 0, sizeof wifi_config);
+    return 0;
 }
 
 static void cmd_ping_on_ping_success(esp_ping_handle_t hdl, void *args)
@@ -250,6 +373,12 @@ static int do_ping_cmd(void)
     esp_ping_start(ping);
 
     return 0;
+}
+
+static void ping_task(void *arg)
+{
+    do_ping_cmd();
+    vTaskDelete(NULL);
 }
 
 void ble_store_config_init(void);
@@ -402,6 +531,7 @@ bleprph_gap_event(struct ble_gap_event *event, void *arg)
             rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
             assert(rc == 0);
             bleprph_print_conn_desc(&desc);
+            gatt_svr_on_connect(event->connect.conn_handle);
         }
 
         if (event->connect.status != 0) {
@@ -413,6 +543,7 @@ bleprph_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnect; reason=%d ", event->disconnect.reason);
         bleprph_print_conn_desc(&event->disconnect.conn);
+        gatt_svr_on_disconnect();
 
         /* Connection terminated; resume advertising. */
         bleprph_advertise();
@@ -452,6 +583,9 @@ bleprph_gap_event(struct ble_gap_event *event, void *arg)
                     event->subscribe.cur_notify,
                     event->subscribe.prev_indicate,
                     event->subscribe.cur_indicate);
+        gatt_svr_on_subscribe(event->subscribe.conn_handle,
+                              event->subscribe.attr_handle,
+                              event->subscribe.cur_notify);
         return 0;
 
     case BLE_GAP_EVENT_MTU:
@@ -537,9 +671,9 @@ app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-    wifi_init_sta();
-    do_ping_cmd();
+    /* Bring the radio up but stay unassociated: which network we join is the
+     * app's decision, delivered over BLE. */
+    wifi_prov_init();
 
     ret = nimble_port_init();
     if (ret != ESP_OK) {
@@ -566,4 +700,12 @@ app_main(void)
     ble_store_config_init();
 
     nimble_port_freertos_init(bleprph_host_task);
+
+    /* If this device has been provisioned before, reconnect without waiting
+     * for the app. Notifications sent before a client subscribes are dropped,
+     * which is fine — the app reads the state when it connects. */
+    if (wifi_creds_load(s_ssid, sizeof s_ssid, s_pass, sizeof s_pass)) {
+        ESP_LOGI(TAG, "using stored credentials for SSID \"%s\"", s_ssid);
+        wifi_prov_connect(s_ssid, s_pass);
+    }
 }
