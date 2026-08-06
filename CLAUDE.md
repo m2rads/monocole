@@ -50,10 +50,11 @@ connection/session management. Full plans live in `docs/`.
   on restart.
 - **Generation cancel**: no stop button; TODO in llama.rs stream_completion.
 - **Monocle protocol**: the wire contract (both planes) is a draft in
-  `docs/protocol.md` — UUIDs, TCP port, and framing unfrozen until milestone 2.
-  TODO(monocle-protocol) and TODO(auto-reconnect) in ble.rs. `ble.rs` today
-  stops at service discovery: no characteristic read/write, no notification
-  subscription, and no TCP client exists yet.
+  `docs/protocol.md`. The Wi-Fi provisioning pair (`wifi_creds` write,
+  `wifi_state` notify) is implemented and its UUIDs are **frozen** in three
+  places — firmware `gatt_svr.c`, `src-tauri/src/ble.rs`, and protocol.md.
+  control/voice/tokens/status are still unassigned. No TCP client exists yet.
+  TODO(monocle-protocol) and TODO(auto-reconnect) in ble.rs.
 - **Firmware**: `firmware/` not started. Milestone 1 (advertise + connect) is
   done via the stock `bleprph` example in `ble-examples/`, which the app
   connects to unmodified. Decisions: C++ on ESP-IDF v6.0.2, NimBLE, and a

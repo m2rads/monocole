@@ -29,7 +29,8 @@ pub fn run() {
             ble::ble_start_scan,
             ble::ble_stop_scan,
             ble::ble_connect,
-            ble::ble_disconnect
+            ble::ble_disconnect,
+            ble::ble_set_wifi_credentials
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

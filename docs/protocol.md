@@ -41,21 +41,53 @@ advertises as `minicole-monocle`. Once the service UUID is frozen, the app
 should filter scans by it (`ScanFilter` in `ble.rs`) instead of listing every
 nearby device.
 
-One custom 128-bit service:
+One custom 128-bit service, `83486508-636c-4260-9119-c0ccc2004219`:
 
-| Characteristic | Direction | Ops | Purpose |
-|---|---|---|---|
-| control | app → device | write | start/stop mic, capture photo, settings |
-| voice | device → app | notify | ADPCM audio frames |
-| tokens | app → device | write | generated text for the LED display |
-| status | device → app | notify | battery, state, errors |
-| wifi_creds | app → device | write | SSID + password for the data plane |
-| wifi_state | device → app | notify | join progress, assigned IP, port |
+| Characteristic | UUID | Direction | Ops | Status |
+|---|---|---|---|---|
+| wifi_creds | `2c9b4a45-…-1f5f2e98db3c` | app → device | write (enc) | **implemented** |
+| wifi_state | `1ad1e743-…-68b4d695ac8b` | device → app | notify | **implemented** |
+| control | *unassigned* | app → device | write | planned |
+| voice | *unassigned* | device → app | notify | planned |
+| tokens | *unassigned* | app → device | write | planned |
+| status | *unassigned* | device → app | notify | planned |
+
+Implemented UUIDs are frozen: they appear in the firmware's `gatt_svr.c` (as
+`BLE_UUID128_INIT`, byte-reversed) and in `src-tauri/src/ble.rs`. Change them
+in all three places or not at all.
 
 `wifi_creds` / `wifi_state` replace BluFi — evaluated and dropped, see
 [firmware-learning-notes.md](firmware-learning-notes.md) §4. Credentials are
 written over an encrypted, bonded link (see Security below), never in the
 clear.
+
+### wifi_creds payload
+
+```
+[ssid_len: u8][ssid bytes][pass_len: u8][pass bytes]
+```
+
+SSID is 1–32 bytes, passphrase 0–63 (empty means an open network, which the
+firmware maps to `WIFI_AUTH_OPEN`). Worst case is 97 bytes, so it always fits
+a single ATT write — no reassembly on either side.
+
+Lengths are **byte** counts, not character counts, and the firmware validates
+every offset against the length actually received before indexing.
+
+### wifi_state payload
+
+```
+[state: u8][extra ...]
+
+0 idle        no credentials yet
+1 connecting  join in progress
+2 connected   + 4 bytes, IPv4 in octet order (a.b.c.d)
+3 failed      + 1 byte, raw 802.11 disconnect reason
+```
+
+Credentials are persisted to NVS only after a join succeeds, so a reboot
+reconnects without the app. Malformed notifications are dropped by the app
+rather than surfaced as a state.
 
 ### Voice framing
 

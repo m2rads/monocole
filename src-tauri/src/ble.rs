@@ -5,17 +5,30 @@ use std::sync::{
 use std::time::Duration;
 
 use btleplug::api::{
-    Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter,
+    Central, CentralEvent, CentralState, Characteristic, Manager as _, Peripheral as _, ScanFilter,
+    WriteType,
 };
-use btleplug::platform::{Adapter, Manager};
+use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
+use uuid::{uuid, Uuid};
 
 pub const DEVICE_EVENT: &str = "ble-device";
 pub const STATUS_EVENT: &str = "ble-status";
+pub const WIFI_EVENT: &str = "ble-wifi";
 const SCAN_TTL: Duration = Duration::from_secs(30);
+
+// The monocle's GATT contract. These must match the BLE_UUID128_INIT values in
+// the firmware's gatt_svr.c — see docs/protocol.md.
+const WIFI_CREDS_CHR_UUID: Uuid = uuid!("2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c");
+const WIFI_STATE_CHR_UUID: Uuid = uuid!("1ad1e743-dcae-422d-a7a8-68b4d695ac8b");
+
+// Mirrors the 802.11 limits the firmware enforces. Checked here too so a bad
+// value is reported in the UI rather than as an opaque ATT error.
+const SSID_MAX_LEN: usize = 32;
+const PASS_MAX_LEN: usize = 63;
 
 // The monocle is currently a XIAO ESP32-S3 Sense, but the board may change,
 // so connection management stays generic BLE: scan for any peripheral and
@@ -100,6 +113,151 @@ fn emit_status(
             reason,
         },
     );
+}
+
+#[derive(Clone, Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiEvent {
+    /// "idle" | "connecting" | "connected" | "failed"
+    kind: &'static str,
+    /// Present on "connected": the address to open the data socket to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ip: Option<String>,
+    /// Present on "failed": the raw 802.11 disconnect reason from the chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<u8>,
+}
+
+/// Builds the wifi_creds payload: `[ssid_len][ssid][pass_len][pass]`.
+///
+/// An empty password means an open network, which the firmware maps to
+/// `WIFI_AUTH_OPEN`.
+fn encode_wifi_creds(ssid: &str, password: &str) -> Result<Vec<u8>, String> {
+    let ssid = ssid.as_bytes();
+    let password = password.as_bytes();
+
+    if ssid.is_empty() {
+        return Err("network name cannot be empty".into());
+    }
+    if ssid.len() > SSID_MAX_LEN {
+        return Err(format!(
+            "network name is {} bytes; the maximum is {SSID_MAX_LEN}",
+            ssid.len()
+        ));
+    }
+    // Deliberately does not quote the password in the message.
+    if password.len() > PASS_MAX_LEN {
+        return Err(format!(
+            "password is {} bytes; the maximum is {PASS_MAX_LEN}",
+            password.len()
+        ));
+    }
+
+    let mut out = Vec::with_capacity(2 + ssid.len() + password.len());
+    out.push(ssid.len() as u8);
+    out.extend_from_slice(ssid);
+    out.push(password.len() as u8);
+    out.extend_from_slice(password);
+    Ok(out)
+}
+
+/// Decodes a wifi_state notification. Returns `None` for anything malformed,
+/// so a firmware mismatch is ignored rather than surfaced as a bogus state.
+fn parse_wifi_state(value: &[u8]) -> Option<WifiEvent> {
+    let (&state, rest) = value.split_first()?;
+    let event = match state {
+        0 => WifiEvent {
+            kind: "idle",
+            ip: None,
+            reason: None,
+        },
+        1 => WifiEvent {
+            kind: "connecting",
+            ip: None,
+            reason: None,
+        },
+        2 => {
+            let octets: [u8; 4] = rest.get(..4)?.try_into().ok()?;
+            WifiEvent {
+                kind: "connected",
+                ip: Some(format!(
+                    "{}.{}.{}.{}",
+                    octets[0], octets[1], octets[2], octets[3]
+                )),
+                reason: None,
+            }
+        }
+        3 => WifiEvent {
+            kind: "failed",
+            ip: None,
+            reason: Some(*rest.first()?),
+        },
+        _ => return None,
+    };
+    Some(event)
+}
+
+fn find_characteristic(peripheral: &Peripheral, uuid: Uuid) -> Option<Characteristic> {
+    peripheral.characteristics().into_iter().find(|c| c.uuid == uuid)
+}
+
+/// Resolves the currently connected peripheral, or explains why it can't.
+async fn connected_peripheral(app: &AppHandle, state: &BleState) -> Result<Peripheral, String> {
+    let id = state
+        .connected
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|device| device.id.clone())
+        .ok_or("no monocle is connected")?;
+
+    let mut inner = state.inner.lock().await;
+    let adapter = ensure_adapter(app, &mut inner, state).await?;
+
+    adapter
+        .peripherals()
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .find(|peripheral| peripheral.id().to_string() == id)
+        .ok_or_else(|| "the connected device is no longer available".to_string())
+}
+
+/// Subscribes to wifi_state and forwards notifications to the frontend.
+///
+/// Devices without the characteristic — the stock `bleprph` example, say —
+/// connect normally and simply never report; that keeps `ble_connect` usable
+/// against firmware that predates this service.
+async fn watch_wifi_state(app: &AppHandle, peripheral: &Peripheral) {
+    let Some(characteristic) = find_characteristic(peripheral, WIFI_STATE_CHR_UUID) else {
+        return;
+    };
+
+    if let Err(err) = peripheral.subscribe(&characteristic).await {
+        eprintln!("ble: could not subscribe to wifi_state: {err}");
+        return;
+    }
+
+    let mut notifications = match peripheral.notifications().await {
+        Ok(stream) => stream,
+        Err(err) => {
+            eprintln!("ble: could not open the notification stream: {err}");
+            return;
+        }
+    };
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Ends on its own when the peripheral disconnects.
+        while let Some(notification) = notifications.next().await {
+            if notification.uuid != WIFI_STATE_CHR_UUID {
+                continue;
+            }
+            if let Some(event) = parse_wifi_state(&notification.value) {
+                let _ = app.emit(WIFI_EVENT, event);
+            }
+        }
+    });
 }
 
 /// Lazily initializes the adapter and the central-event listener task.
@@ -279,6 +437,8 @@ pub async fn ble_connect(
         .await
         .map_err(|err| format!("connected, but service discovery failed: {err}"))?;
 
+    watch_wifi_state(&app, &peripheral).await;
+
     let name = peripheral
         .properties()
         .await
@@ -295,6 +455,34 @@ pub async fn ble_connect(
         None,
     );
     Ok(device)
+}
+
+/// Hands the monocle the network it should join for the Wi-Fi data plane.
+///
+/// The passphrase crosses an encrypted, bonded link — the firmware marks
+/// wifi_creds `WRITE_ENC`, so macOS pairs before the write lands and the
+/// firmware re-checks encryption before accepting it. Progress comes back
+/// asynchronously as `WIFI_EVENT`, not as this call's return value.
+#[tauri::command]
+pub async fn ble_set_wifi_credentials(
+    app: AppHandle,
+    state: State<'_, BleState>,
+    ssid: String,
+    password: String,
+) -> Result<(), String> {
+    let payload = encode_wifi_creds(&ssid, &password)?;
+    let peripheral = connected_peripheral(&app, &state).await?;
+
+    let characteristic = find_characteristic(&peripheral, WIFI_CREDS_CHR_UUID).ok_or(
+        "this device has no Wi-Fi provisioning characteristic — is it running minicole firmware?",
+    )?;
+
+    // WithResponse so the firmware's ATT error (bad length, unencrypted link)
+    // comes back to us instead of being dropped silently.
+    peripheral
+        .write(&characteristic, &payload, WriteType::WithResponse)
+        .await
+        .map_err(|err| format!("failed to send Wi-Fi credentials: {err}"))
 }
 
 #[tauri::command]
