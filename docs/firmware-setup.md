@@ -102,5 +102,78 @@ Exit the monitor with **Ctrl-]**.
 - Every command above assumes `export.sh` was sourced in the current
   terminal. If `idf.py: command not found`, that's the reason.
 
+---
 
- . ~/.espressif/v6.0.2/esp-idf/export.sh && cd ~/Documents/projects/minicole/hello-world && idf.py -p /dev/cu.usbmodem3101 flash monitor
+# Cheat sheet: build & flash any example
+
+Run these four in order, from the example's directory.
+
+### 1. Activate the SDK — every new terminal
+
+```bash
+. ~/.espressif/v6.0.2/esp-idf/export.sh
+```
+
+Leading `.` (= `source`). Not `./export.sh` — that exports into a subshell and
+does nothing.
+
+### 2. Set the target — once per project
+
+```bash
+idf.py set-target esp32s3
+```
+
+**`esp32s3`, no hyphen.** `esp32-s3` is not a valid name: the command fails,
+`sdkconfig` is never written, and the target silently stays `esp32`. That's the
+cause of `--chip;esp32` in flash errors.
+
+### 3. Find your port — it changes between sessions
+
+```bash
+ls /dev/cu.usbmodem*
+```
+
+Use whatever it prints. **Never type `PORT` literally** — that's a placeholder
+in Espressif's READMEs, and you get `Could not open PORT`.
+
+### 4. Build, flash, watch
+
+```bash
+idf.py build
+idf.py -p /dev/cu.usbmodem3101 flash monitor
+```
+
+Exit the monitor with **Ctrl-]**.
+
+## One-liner
+
+```bash
+. ~/.espressif/v6.0.2/esp-idf/export.sh && idf.py -p $(ls /dev/cu.usbmodem* | head -1) flash monitor
+```
+
+## Gotchas, in the order they bite
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `idf.py: command not found` | new terminal | step 1 |
+| `Could not open PORT` | typed `PORT` literally | step 3 |
+| `--chip;esp32` in the error | target never set (hyphen typo) | step 2 |
+| `This chip is ESP32-S3, not ESP32` | built for the wrong target | step 2, then rebuild |
+| menuconfig settings vanished | `set-target` resets `sdkconfig` | put them in `sdkconfig.defaults` |
+| `Failed to connect` / timeout | not in download mode | hold **BOOT**, tap **RESET**, release **BOOT**, reflash |
+| port busy | old monitor still open | Ctrl-] in the other terminal |
+| no `/dev/cu.usbmodem*` at all | charge-only USB cable | swap the cable first |
+
+## Wi-Fi examples need credentials
+
+Examples with Wi-Fi (e.g. `bleprph_wifi_coex`) ship placeholders —
+`myssid` / `mypassword`. Set real ones before flashing:
+
+```bash
+idf.py menuconfig     # → Example Configuration → WiFi SSID / WiFi Password
+```
+
+The ESP32-S3 is **2.4 GHz only**. It cannot join a 5 GHz network, and it cannot
+log into a captive portal. Public and coworking Wi-Fi typically fails on both
+counts. Use a phone hotspot with "Maximize Compatibility" **on** (forces
+2.4 GHz), or a home router.
