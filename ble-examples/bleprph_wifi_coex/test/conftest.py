@@ -43,6 +43,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "join: additionally needs real Wi-Fi credentials (--ssid)"
     )
+    config.addinivalue_line(
+        "markers", "slow: takes tens of seconds (idle timers)"
+    )
 
 
 @pytest.fixture(scope="session")

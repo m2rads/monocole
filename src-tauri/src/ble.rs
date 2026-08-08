@@ -24,6 +24,7 @@ const SCAN_TTL: Duration = Duration::from_secs(30);
 // the firmware's gatt_svr.c — see docs/protocol.md.
 const WIFI_CREDS_CHR_UUID: Uuid = uuid!("2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c");
 const WIFI_STATE_CHR_UUID: Uuid = uuid!("1ad1e743-dcae-422d-a7a8-68b4d695ac8b");
+const WIFI_CONTROL_CHR_UUID: Uuid = uuid!("e4782756-b76f-482c-9a0a-8c546a9134f1");
 
 // Mirrors the 802.11 limits the firmware enforces. Checked here too so a bad
 // value is reported in the UI rather than as an opaque ATT error.
@@ -483,6 +484,28 @@ pub async fn ble_set_wifi_credentials(
         .write(&characteristic, &payload, WriteType::WithResponse)
         .await
         .map_err(|err| format!("failed to send Wi-Fi credentials: {err}"))
+}
+
+/// Powers the monocle's Wi-Fi data plane up or down.
+///
+/// The device also powers itself down on its own idle timer; this is the way
+/// back up, and the way to end a burst early. BLE is unaffected either way.
+#[tauri::command]
+pub async fn ble_set_wifi_power(
+    app: AppHandle,
+    state: State<'_, BleState>,
+    on: bool,
+) -> Result<(), String> {
+    let peripheral = connected_peripheral(&app, &state).await?;
+
+    let characteristic = find_characteristic(&peripheral, WIFI_CONTROL_CHR_UUID).ok_or(
+        "this device has no Wi-Fi control characteristic — is it running minicole firmware?",
+    )?;
+
+    peripheral
+        .write(&characteristic, &[u8::from(on)], WriteType::WithResponse)
+        .await
+        .map_err(|err| format!("failed to set Wi-Fi power: {err}"))
 }
 
 #[tauri::command]

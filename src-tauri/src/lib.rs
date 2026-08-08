@@ -2,6 +2,7 @@ pub mod ble;
 pub mod llama;
 pub mod manifest;
 pub mod models;
+pub mod socket;
 
 #[cfg(test)]
 #[path = "../tests/helpers.rs"]
@@ -30,7 +31,10 @@ pub fn run() {
             ble::ble_stop_scan,
             ble::ble_connect,
             ble::ble_disconnect,
-            ble::ble_set_wifi_credentials
+            ble::ble_set_wifi_credentials,
+            ble::ble_set_wifi_power,
+            socket::socket_echo,
+            socket::socket_benchmark
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

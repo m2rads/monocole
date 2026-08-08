@@ -62,6 +62,53 @@ void gatt_svr_notify_wifi_state(uint8_t state, const void *extra,
 /* Implemented in main.c; called by the GATT write handler once credentials
  * have been received and validated. Returns 0 on success. */
 int wifi_prov_connect(const char *ssid, const char *pass);
+
+/* Re-join using credentials already stored in NVS, powering the radio back
+ * up if it was shut down. Returns 0 if the attempt started. */
+int wifi_prov_resume(void);
+
+/* Close the data plane and power the Wi-Fi radio down. This is what keeps
+ * Wi-Fi's duty cycle low; BLE is unaffected. */
+void wifi_prov_shutdown(void);
+
+/* Values written to the wifi_control characteristic. */
+enum monocle_wifi_command {
+    MONOCLE_WIFI_CMD_DOWN = 0,
+    MONOCLE_WIFI_CMD_UP   = 1,
+};
+
+/* Queues a power change on a worker task. Called from the GATT write handler,
+ * which must not block the BLE host task inside esp_wifi_stop(). */
+void wifi_prov_request(bool bring_up);
+
+/*
+ * Wi-Fi data plane.
+ *
+ * The monocle listens; the desktop app connects. Every message is
+ *
+ *     [len: u32 big-endian][type: u8][payload ...]
+ *
+ * where len counts the type byte plus the payload, so it is always >= 1.
+ * Keep in sync with src-tauri/src/socket.rs and docs/protocol.md.
+ */
+#define MONOCLE_TCP_PORT            3333
+#define MONOCLE_FRAME_HEADER_LEN    5
+#define MONOCLE_MAX_PAYLOAD         8192
+
+/* How long the data plane stays up with no client and no traffic before the
+ * radio is powered down. */
+#define MONOCLE_IDLE_TIMEOUT_MS     30000
+
+enum monocle_frame_type {
+    MONOCLE_FRAME_ECHO_REQ  = 1,  /* app -> device, payload echoed back */
+    MONOCLE_FRAME_ECHO_RESP = 2,  /* device -> app */
+    MONOCLE_FRAME_BULK_REQ  = 3,  /* app -> device, u32 BE byte count */
+    MONOCLE_FRAME_BULK_DATA = 4,  /* device -> app, synthetic payload */
+    MONOCLE_FRAME_BULK_END  = 5,  /* device -> app, u32 BE bytes sent */
+};
+
+void tcp_server_start(void);
+void tcp_server_stop(void);
 #ifdef __cplusplus
 }
 #endif

@@ -47,6 +47,7 @@ One custom 128-bit service, `83486508-636c-4260-9119-c0ccc2004219`:
 |---|---|---|---|---|
 | wifi_creds | `2c9b4a45-…-1f5f2e98db3c` | app → device | write (enc) | **implemented** |
 | wifi_state | `1ad1e743-…-68b4d695ac8b` | device → app | notify | **implemented** |
+| wifi_control | `e4782756-…-8c546a9134f1` | app → device | write (enc) | **implemented** |
 | control | *unassigned* | app → device | write | planned |
 | voice | *unassigned* | device → app | notify | planned |
 | tokens | *unassigned* | app → device | write | planned |
@@ -88,6 +89,16 @@ every offset against the length actually received before indexing.
 Credentials are persisted to NVS only after a join succeeds, so a reboot
 reconnects without the app. Malformed notifications are dropped by the app
 rather than surfaced as a state.
+
+### wifi_control payload
+
+A single byte: `0` powers the data plane down, `1` brings it back up using
+stored credentials. Encrypted for the same reason as the credentials — an
+unauthenticated peer should not be able to flatten the battery by cycling the
+radio.
+
+The device also powers itself down on its own idle timer; this characteristic
+is the way back up, and the way to end a burst early.
 
 ### Voice framing
 
@@ -142,9 +153,14 @@ work — **the socket is not held open between captures.**
 
 ### Transport: raw TCP, length-prefixed
 
-Raw TCP rather than WebSocket. WebSocket buys nothing here — it exists for
-browser clients and hostile intermediaries, and we own both ends. Its handshake
-and client-side masking are pure cost on the ESP32.
+The device listens on **port 3333**; the app connects. Raw TCP rather than
+WebSocket — WebSocket exists for browser clients and hostile intermediaries,
+and we own both ends. Its handshake and client-side masking are pure cost on
+the ESP32.
+
+The port is a fixed constant rather than negotiated: `wifi_state` already
+delivers the address, and a negotiated port would add a failure mode for no
+benefit.
 
 Every message:
 
@@ -152,23 +168,45 @@ Every message:
 [len: u32 BE][type: u8][payload ...]
 ```
 
-Image capture, as a message sequence:
+`len` counts the type byte plus the payload, so it is always >= 1. Payloads are
+capped at 8192 bytes, which also bounds what a confused peer can make either
+side allocate from a 5-byte header.
+
+**Implemented frame types:**
+
+| Type | Name | Direction | Payload |
+|---|---|---|---|
+| 1 | ECHO_REQ | app → device | arbitrary bytes |
+| 2 | ECHO_RESP | device → app | the same bytes |
+| 3 | BULK_REQ | app → device | `u32` byte count |
+| 4 | BULK_DATA | device → app | synthetic chunk |
+| 5 | BULK_END | device → app | `u32` bytes sent |
+
+Echo proves the pipe. Bulk exists to measure throughput before the camera
+lands — the receiver checks the BULK_END count against what actually arrived,
+so a short transfer is an error rather than a fast-looking result.
+
+**Planned**, once the camera exists — image capture as a sequence:
 
 ```
-START  { total_size: u32, width: u16, height: u16 }
-DATA   { seq: u16, bytes }        (repeated)
-END    { crc32: u32 }
+START  { total_size, width, height }
+DATA   { seq, bytes }        (repeated)
+END    { crc32 }
 ```
 
-The app reassembles, verifies CRC32, and requests a retake on mismatch. The
-capture is triggered over BLE `control`; only the bytes come back here.
+The app reassembles, verifies CRC32, and requests a retake on mismatch. Capture
+is triggered over BLE `control`; only the bytes come back here.
 
 ### Power model
 
-Wi-Fi is off until a capture is requested and goes down after an idle timeout.
+Wi-Fi is off until it is asked for, and goes down after an idle timeout —
+currently 30 s with no client connected or no traffic on a connected one.
+Teardown closes the listener, disconnects the station, calls `esp_wifi_stop()`,
+and notifies `idle` over BLE. `wifi_control` brings it back.
+
 Sustained-connection Wi-Fi would dominate the power budget and defeat the split
-this protocol is built around. Firmware must treat "Wi-Fi is up" as a
-short-lived state, not a session property.
+this protocol is built around. Firmware treats "Wi-Fi is up" as a short-lived
+state, not a session property.
 
 ## Open questions
 

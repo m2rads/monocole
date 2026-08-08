@@ -76,6 +76,11 @@ static const ble_uuid128_t gatt_svr_chr_wifi_state_uuid =
     BLE_UUID128_INIT(0x8b, 0xac, 0x95, 0xd6, 0xb4, 0x68, 0xa8, 0xa7,
                      0x2d, 0x42, 0xae, 0xdc, 0x43, 0xe7, 0xd1, 0x1a);
 
+/* e4782756-b76f-482c-9a0a-8c546a9134f1 — app powers the data plane up/down. */
+static const ble_uuid128_t gatt_svr_chr_wifi_control_uuid =
+    BLE_UUID128_INIT(0xf1, 0x34, 0x91, 0x6a, 0x54, 0x8c, 0x0a, 0x9a,
+                     0x2c, 0x48, 0x6f, 0xb7, 0x56, 0x27, 0x78, 0xe4);
+
 static const char* TAG = "wifi_prph_coex";
 
 static uint8_t gatt_svr_sec_test_static_val;
@@ -145,6 +150,17 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .access_cb = gatt_svr_chr_access_wifi,
                 .flags = BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &gatt_svr_chr_wifi_state_handle
+            }, {
+                /*** Characteristic: data-plane power control (app -> device).
+                 *
+                 * Encrypted for the same reason as the credentials: an
+                 * unauthenticated peer should not be able to flatten the
+                 * battery by cycling the Wi-Fi radio.
+                 */
+                .uuid = &gatt_svr_chr_wifi_control_uuid.u,
+                .access_cb = gatt_svr_chr_access_wifi,
+                .flags = BLE_GATT_CHR_F_WRITE |
+                BLE_GATT_CHR_F_WRITE_ENC
             }, {
                 0, /* No more characteristics in this service. */
             }
@@ -250,8 +266,7 @@ gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
     uint16_t len;
     int rc;
 
-    if (ble_uuid_cmp(ctxt->chr->uuid, &gatt_svr_chr_wifi_creds_uuid.u) != 0 ||
-        ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
         return BLE_ATT_ERR_UNLIKELY;
     }
 
@@ -260,8 +275,29 @@ gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
      * trusting a single flag in a table far from here. */
     rc = ble_gap_conn_find(conn_handle, &desc);
     if (rc != 0 || !desc.sec_state.encrypted) {
-        ESP_LOGW(TAG, "rejected credential write on an unencrypted link");
+        ESP_LOGW(TAG, "rejected write on an unencrypted link");
         return BLE_ATT_ERR_INSUFFICIENT_ENC;
+    }
+
+    if (ble_uuid_cmp(ctxt->chr->uuid, &gatt_svr_chr_wifi_control_uuid.u) == 0) {
+        uint8_t command;
+
+        rc = gatt_svr_chr_write(ctxt->om, 1, 1, &command, NULL);
+        if (rc != 0) {
+            return rc;
+        }
+        if (command != MONOCLE_WIFI_CMD_UP && command != MONOCLE_WIFI_CMD_DOWN) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+
+        ESP_LOGI(TAG, "wifi control: %s",
+                 command == MONOCLE_WIFI_CMD_UP ? "up" : "down");
+        wifi_prov_request(command == MONOCLE_WIFI_CMD_UP);
+        return 0;
+    }
+
+    if (ble_uuid_cmp(ctxt->chr->uuid, &gatt_svr_chr_wifi_creds_uuid.u) != 0) {
+        return BLE_ATT_ERR_UNLIKELY;
     }
 
     /* Shortest legal message is a 1-byte SSID with an empty passphrase. */

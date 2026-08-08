@@ -88,17 +88,18 @@ optionally a snapshot of what they're looking at goes along with the query.
 3. **Voice path** — mic → I2S DMA → ADPCM → BLE notify → app writes a WAV to
    disk. Confirm sustained 64 kbps holds without drops (absorbs the old
    throughput test).
-4. **Wi-Fi handoff** — creds write → join → report IP over BLE → app opens a
-   TCP socket → echo test. Verify the radio actually powers down on idle.
+4. ~~**Wi-Fi handoff**~~ — **done.** Creds write → join → report IP over BLE →
+   app opens a TCP socket → echo + bulk transfer, with idle teardown and
+   `wifi_control` to power the plane back up. Throughput measurement pending on
+   hardware; see `ble-examples/bleprph_wifi_coex/test/`.
 5. **Photo path** — capture command over BLE `control` → JPEG over the socket →
    app verifies CRC and saves it.
 6. **Full loop** — voice → STT → llama.cpp → tokens → monocle display.
 
-Milestones 2–5 each need new Rust in `src-tauri/src/ble.rs`, which today does
-scan/connect/disconnect and nothing past service discovery — see
-`TODO(monocle-protocol)` and `TODO(auto-reconnect)` there. Milestone 4 also
-introduces the app's first TCP client; milestone 6 depends on the STT stage,
-which has not been started.
+`ble.rs` now does scan/connect/disconnect plus the Wi-Fi provisioning writes
+and `wifi_state` subscription; `socket.rs` is the data-plane client. Milestones
+2, 3 and 5 still need new Rust there — see `TODO(monocle-protocol)` and
+`TODO(auto-reconnect)`. Milestone 6 depends on the STT stage, not started.
 
 ## Hardware config still to enable
 

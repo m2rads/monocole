@@ -37,7 +37,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "ping/ping_sock.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -46,9 +45,10 @@
 #include "lwip/sockets.h"
 
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_EXAMPLE_ESP_MAXIMUM_RETRY
-#define EXAMPLE_PING_IP            CONFIG_EXAMPLE_ESP_PING_IP
-#define EXAMPLE_PING_COUNT         CONFIG_EXAMPLE_ESP_PING_COUNT
-#define EXAMPLE_PING_INTERVAL      1
+
+/* The SSID the example ships with. Treated as "unset" so an untouched
+ * menuconfig doesn't send us chasing a network that doesn't exist. */
+#define EXAMPLE_PLACEHOLDER_SSID   "myssid"
 
 /* Where remembered credentials live, so a reboot doesn't need the app. */
 #define MONOCLE_NVS_NAMESPACE      "monocle"
@@ -57,7 +57,6 @@
 
 static int bleprph_gap_event(struct ble_gap_event *event, void *arg);
 static uint8_t own_addr_type;
-static void ping_task(void *arg);
 
 static const char *TAG = "wifi_prph_coex";
 
@@ -175,9 +174,8 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         gatt_svr_notify_wifi_state(MONOCLE_WIFI_CONNECTED, octets,
                                    sizeof octets);
 
-        /* Reachability check, on its own task: the ping helper can block on
-         * name resolution and this is the shared event-loop task. */
-        xTaskCreate(ping_task, "monocle_ping", 4096, NULL, 5, NULL);
+        /* The data plane only exists while we have an address. */
+        tcp_server_start();
     }
 }
 
@@ -279,106 +277,69 @@ int wifi_prov_connect(const char *ssid, const char *pass)
     return 0;
 }
 
-static void cmd_ping_on_ping_success(esp_ping_handle_t hdl, void *args)
+/**
+ * Re-joins using whatever is already in NVS, restarting the radio if it was
+ * powered down. This is the "wake the data plane" half of the power model:
+ * the app asks for it just before it wants bulk transfer.
+ */
+int wifi_prov_resume(void)
 {
-    uint8_t ttl;
-    uint16_t seqno;
-    uint32_t elapsed_time, recv_len;
-    ip_addr_t target_addr;
-    esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seqno, sizeof(seqno));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_TTL, &ttl, sizeof(ttl));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_IPADDR, &target_addr, sizeof(target_addr));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_SIZE, &recv_len, sizeof(recv_len));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &elapsed_time, sizeof(elapsed_time));
-    const char *ip_str = IP_IS_V4(&target_addr) ? inet_ntoa(*ip_2_ip4(&target_addr)) :
-                                                inet6_ntoa(*ip_2_ip6(&target_addr));
-    printf("%" PRIu32 "bytes from %s icmp_seq=%d ttl=%d time=%" PRIu32 "ms\n",
-           recv_len, ip_str, seqno, ttl, elapsed_time);
+    if (s_ssid[0] == '\0' &&
+        !wifi_creds_load(s_ssid, sizeof s_ssid, s_pass, sizeof s_pass)) {
+        ESP_LOGW(TAG, "resume requested but no credentials are stored");
+        return -1;
+    }
+
+    if (!s_wifi_started) {
+        esp_err_t err = esp_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_start failed; err=%d", err);
+            return -1;
+        }
+        s_wifi_started = true;
+    }
+
+    return wifi_prov_connect(s_ssid, s_pass);
 }
 
-static void cmd_ping_on_ping_timeout(esp_ping_handle_t hdl, void *args)
+/**
+ * Drops the data plane and powers the Wi-Fi radio down.
+ *
+ * BLE is untouched — control, status and (later) voice keep working. This is
+ * what makes the second radio affordable: it is off except during a burst.
+ */
+void wifi_prov_shutdown(void)
 {
-    uint16_t seqno;
-    ip_addr_t target_addr;
-    esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seqno, sizeof(seqno));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_IPADDR, &target_addr, sizeof(target_addr));
-    const char *ip_str = IP_IS_V4(&target_addr) ? inet_ntoa(*ip_2_ip4(&target_addr)) :
-                                                inet6_ntoa(*ip_2_ip6(&target_addr));
-    printf("From %s icmp_seq=%d timeout\n", ip_str, seqno);
+    if (!s_wifi_started) {
+        return;
+    }
+
+    tcp_server_stop();
+
+    s_provisioned = false;      /* stop the disconnect handler retrying */
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+    s_wifi_started = false;
+
+    ESP_LOGI(TAG, "wifi powered down");
+    gatt_svr_notify_wifi_state(MONOCLE_WIFI_IDLE, NULL, 0);
 }
 
-
-static void cmd_ping_on_ping_end(esp_ping_handle_t hdl, void *args)
+static void wifi_cmd_task(void *arg)
 {
-    ip_addr_t target_addr;
-    uint32_t transmitted;
-    uint32_t received;
-    uint32_t total_time_ms;
-    esp_ping_get_profile(hdl, ESP_PING_PROF_REQUEST, &transmitted, sizeof(transmitted));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_REPLY, &received, sizeof(received));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_IPADDR, &target_addr, sizeof(target_addr));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_DURATION, &total_time_ms, sizeof(total_time_ms));
-    uint32_t loss = (uint32_t)((1 - ((float)received) / transmitted) * 100);
-    if (IP_IS_V4(&target_addr)) {
-        printf("\n--- %s ping statistics ---\n", inet_ntoa(*ip_2_ip4(&target_addr)));
+    if ((uintptr_t) arg != 0) {
+        wifi_prov_resume();
     } else {
-        printf("\n--- %s ping statistics ---\n", inet6_ntoa(*ip_2_ip6(&target_addr)));
+        wifi_prov_shutdown();
     }
-    printf("%" PRIu32 "packets transmitted, %" PRIu32 " received, %" PRIu32 "%% packet loss, time %" PRIu32 "ms\n",
-           transmitted, received, loss, total_time_ms);
-    // delete the ping sessions, so that we clean up all resources and can create a new ping session
-    // we don't have to call delete function in the callback, instead we can call delete function from other tasks
-    esp_ping_delete_session(hdl);
-}
-
-static int do_ping_cmd(void)
-{
-    esp_ping_config_t config = ESP_PING_DEFAULT_CONFIG();
-    static esp_ping_handle_t ping;
-
-    config.interval_ms = (uint32_t)(EXAMPLE_PING_INTERVAL * 1000);
-    config.count = (uint32_t)(EXAMPLE_PING_COUNT);
-
-    // parse IP address
-    ip_addr_t target_addr;
-    struct addrinfo hint;
-    struct addrinfo *res = NULL;
-    memset(&hint, 0, sizeof(hint));
-    memset(&target_addr, 0, sizeof(target_addr));
-
-    /* convert domain name to IP address */
-    if (getaddrinfo(EXAMPLE_PING_IP, NULL, &hint, &res) != 0) {
-        printf("ping: unknown host %s\n", EXAMPLE_PING_IP);
-        return 1;
-    }
-    if (res->ai_family == AF_INET) {
-        struct in_addr addr4 = ((struct sockaddr_in *) (res->ai_addr))->sin_addr;
-        inet_addr_to_ip4addr(ip_2_ip4(&target_addr), &addr4);
-    } else {
-        struct in6_addr addr6 = ((struct sockaddr_in6 *) (res->ai_addr))->sin6_addr;
-        inet6_addr_to_ip6addr(ip_2_ip6(&target_addr), &addr6);
-    }
-    freeaddrinfo(res);
-    config.target_addr = target_addr;
-
-    /* set callback functions */
-    esp_ping_callbacks_t cbs = {
-        .on_ping_success = cmd_ping_on_ping_success,
-        .on_ping_timeout = cmd_ping_on_ping_timeout,
-        .on_ping_end = cmd_ping_on_ping_end,
-        .cb_args = NULL
-    };
-
-    esp_ping_new_session(&config, &cbs, &ping);
-    esp_ping_start(ping);
-
-    return 0;
-}
-
-static void ping_task(void *arg)
-{
-    do_ping_cmd();
     vTaskDelete(NULL);
+}
+
+void wifi_prov_request(bool bring_up)
+{
+    /* esp_wifi_start/stop can block; the BLE host task must not. */
+    xTaskCreate(wifi_cmd_task, "monocle_wifi_cmd", 4096,
+                (void *)(uintptr_t)(bring_up ? 1 : 0), 5, NULL);
 }
 
 void ble_store_config_init(void);
@@ -707,5 +668,17 @@ app_main(void)
     if (wifi_creds_load(s_ssid, sizeof s_ssid, s_pass, sizeof s_pass)) {
         ESP_LOGI(TAG, "using stored credentials for SSID \"%s\"", s_ssid);
         wifi_prov_connect(s_ssid, s_pass);
+    } else if (strcmp(CONFIG_EXAMPLE_ESP_WIFI_SSID, EXAMPLE_PLACEHOLDER_SSID) != 0) {
+        /* Development convenience: credentials set in menuconfig are used when
+         * nothing has been provisioned over BLE yet. A successful join saves
+         * them to NVS, after which the stored copy wins and this is skipped.
+         * Leave the SSID at its placeholder to disable this path. */
+        ESP_LOGI(TAG, "using menuconfig credentials for SSID \"%s\"",
+                 CONFIG_EXAMPLE_ESP_WIFI_SSID);
+        wifi_prov_connect(CONFIG_EXAMPLE_ESP_WIFI_SSID,
+                          CONFIG_EXAMPLE_ESP_WIFI_PASSWORD);
+    } else {
+        ESP_LOGI(TAG, "no stored or configured credentials; "
+                      "write them to the wifi_creds characteristic");
     }
 }
