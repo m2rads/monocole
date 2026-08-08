@@ -25,6 +25,7 @@
 #include "bleprph.h"
 #include "services/ans/ble_svc_ans.h"
 #include "esp_log.h"
+#include "display.h"
 
 
 /**
@@ -81,6 +82,11 @@ static const ble_uuid128_t gatt_svr_chr_wifi_control_uuid =
     BLE_UUID128_INIT(0xf1, 0x34, 0x91, 0x6a, 0x54, 0x8c, 0x0a, 0x9a,
                      0x2c, 0x48, 0x6f, 0xb7, 0x56, 0x27, 0x78, 0xe4);
 
+/* e474939e-3010-4284-b280-4f365b6fe723 — what the wearer sees on the panel. */
+static const ble_uuid128_t gatt_svr_chr_display_uuid =
+    BLE_UUID128_INIT(0x23, 0xe7, 0x6f, 0x5b, 0x36, 0x4f, 0x80, 0xb2,
+                     0x84, 0x42, 0x10, 0x30, 0x9e, 0x93, 0x74, 0xe4);
+
 static const char* TAG = "wifi_prph_coex";
 
 static uint8_t gatt_svr_sec_test_static_val;
@@ -103,6 +109,11 @@ static int
 gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
                          struct ble_gatt_access_ctxt *ctxt,
                          void *arg);
+
+static int
+gatt_svr_chr_access_display(uint16_t conn_handle, uint16_t attr_handle,
+                            struct ble_gatt_access_ctxt *ctxt,
+                            void *arg);
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
     {
@@ -159,6 +170,16 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                  */
                 .uuid = &gatt_svr_chr_wifi_control_uuid.u,
                 .access_cb = gatt_svr_chr_access_wifi,
+                .flags = BLE_GATT_CHR_F_WRITE |
+                BLE_GATT_CHR_F_WRITE_ENC
+            }, {
+                /*** Characteristic: panel contents (app -> device).
+                 *
+                 * Encrypted like the rest: an unauthenticated peer should not
+                 * be able to put text in front of the wearer's eye.
+                 */
+                .uuid = &gatt_svr_chr_display_uuid.u,
+                .access_cb = gatt_svr_chr_access_display,
                 .flags = BLE_GATT_CHR_F_WRITE |
                 BLE_GATT_CHR_F_WRITE_ENC
             }, {
@@ -338,6 +359,57 @@ gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
     memset(buf, 0, sizeof buf);
     memset(pass, 0, sizeof pass);
 
+    return 0;
+}
+
+/**
+ * Handles writes to the display characteristic: `[op: u8][utf-8 text]`.
+ *
+ * Nothing is drawn here. A full panel update is ~25 ms of I2C and this is the
+ * BLE host task, so the payload is queued and the display task renders it.
+ */
+static int
+gatt_svr_chr_access_display(uint16_t conn_handle, uint16_t attr_handle,
+                            struct ble_gatt_access_ctxt *ctxt,
+                            void *arg)
+{
+    uint8_t buf[1 + DISPLAY_TEXT_MAX];
+    struct ble_gap_conn_desc desc;
+    uint16_t len;
+    int rc;
+
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    /* Same defence in depth as the credentials write: the flag in the table
+     * should already guarantee this, but confirm it here too. */
+    rc = ble_gap_conn_find(conn_handle, &desc);
+    if (rc != 0 || !desc.sec_state.encrypted) {
+        ESP_LOGW(TAG, "rejected display write on an unencrypted link");
+        return BLE_ATT_ERR_INSUFFICIENT_ENC;
+    }
+
+    /* At least the op byte; at most one ATT write's worth. */
+    rc = gatt_svr_chr_write(ctxt->om, 1, sizeof buf, buf, &len);
+    if (rc != 0) {
+        return rc;
+    }
+
+    uint8_t op = buf[0];
+    if (op != DISPLAY_OP_CLEAR && op != DISPLAY_OP_SET &&
+        op != DISPLAY_OP_APPEND) {
+        ESP_LOGW(TAG, "unknown display op %u", op);
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    ESP_LOGI(TAG, "display write: op=%u, %u bytes", op, (unsigned)(len - 1));
+
+    if (!display_post(op, (const char *)&buf[1], len - 1)) {
+        /* The queue is full, so the panel is already behind. Dropping beats
+         * blocking the radio, and the next update supersedes this one anyway. */
+        ESP_LOGW(TAG, "display queue full; dropped an update");
+    }
     return 0;
 }
 

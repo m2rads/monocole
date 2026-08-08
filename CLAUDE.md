@@ -57,6 +57,16 @@ connection/session management. Full plans live in `docs/`.
   unassigned. TODO(monocle-protocol) and TODO(auto-reconnect) in ble.rs.
   Nothing in `src/` calls the Wi-Fi or socket commands yet — they are driven
   only from the pytest suite.
+- **Display**: a 128×64 SSD1306 OLED on I2C (SDA GPIO5, SCL GPIO6), driven by
+  the `display` characteristic — `[op][utf-8]`, op is clear/set/append. Both
+  sides are built: `main/display.c` renders on its own task (never render in
+  the BLE callback — I2C is ~25 ms), and `ble.rs` writes a greeting on
+  connect. Text goes over BLE, never the socket, because waking Wi-Fi costs
+  ~1.5 s regardless of payload size. **Still to do**: token streaming — use
+  `append`, coalesced on a ~100–200 ms timer rather than one write per token,
+  and nothing calls `ble_display_text` from `src/` yet. Panel geometry is
+  21×8 characters; only `display.c` should know that. See Future work in
+  protocol.md.
 - **Firmware**: `firmware/` not started; the working firmware is the forked
   `ble-examples/bleprph_wifi_coex/`, which still advertises as
   `nimble-bleprph`. Milestones 1, 2 (partial), and 4 are done: pairing with

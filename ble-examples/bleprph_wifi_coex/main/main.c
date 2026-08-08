@@ -26,6 +26,7 @@
 #include "console/console.h"
 #include "services/gap/ble_svc_gap.h"
 #include "bleprph.h"
+#include "display.h"
 
 /* WIFI */
 #include <stdlib.h>
@@ -578,6 +579,11 @@ bleprph_gap_event(struct ble_gap_event *event, void *arg)
         bleprph_print_conn_desc(&event->disconnect.conn);
         gatt_svr_on_disconnect();
 
+        /* Say so on the panel. Whatever the app last wrote there is now stale,
+         * and a screen that keeps showing it is indistinguishable from a live
+         * one. */
+        display_show("minicole\ndisconnected");
+
         /* Connection terminated; resume advertising. */
         bleprph_advertise();
         return 0;
@@ -703,6 +709,13 @@ app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    /* The panel is this device's only output, so bring it up before anything
+     * that might want to report a problem on it. A missing display is logged
+     * and otherwise ignored — the rest of the device still works headless. */
+    if (display_init() == ESP_OK) {
+        display_show("minicole\nwaiting for app");
+    }
 
     /* Bring the radio up but stay unassociated: which network we join is the
      * app's decision, delivered over BLE. */

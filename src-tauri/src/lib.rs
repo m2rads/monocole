@@ -33,6 +33,7 @@ pub fn run() {
             ble::ble_disconnect,
             ble::ble_set_wifi_credentials,
             ble::ble_set_wifi_power,
+            ble::ble_display_text,
             socket::socket_echo,
             socket::socket_benchmark
         ])

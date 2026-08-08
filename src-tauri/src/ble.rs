@@ -25,11 +25,24 @@ const SCAN_TTL: Duration = Duration::from_secs(30);
 const WIFI_CREDS_CHR_UUID: Uuid = uuid!("2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c");
 const WIFI_STATE_CHR_UUID: Uuid = uuid!("1ad1e743-dcae-422d-a7a8-68b4d695ac8b");
 const WIFI_CONTROL_CHR_UUID: Uuid = uuid!("e4782756-b76f-482c-9a0a-8c546a9134f1");
+const DISPLAY_CHR_UUID: Uuid = uuid!("e474939e-3010-4284-b280-4f365b6fe723");
 
 // Mirrors the 802.11 limits the firmware enforces. Checked here too so a bad
 // value is reported in the UI rather than as an opaque ATT error.
 const SSID_MAX_LEN: usize = 32;
 const PASS_MAX_LEN: usize = 63;
+
+// Display ops, mirroring `enum display_op` in the firmware's display.h.
+const DISPLAY_OP_SET: u8 = 1;
+
+// One ATT write at the MTU macOS negotiates (256), minus the op byte. Longer
+// text is the caller's job to split — truncating here would cut UTF-8
+// mid-character and silently lose what the wearer was meant to read.
+const DISPLAY_TEXT_MAX: usize = 253;
+
+// What the panel shows once the app takes over. Matches the shape of the
+// firmware's own boot and disconnect messages.
+const GREETING: &str = "minicole\nconnected";
 
 // The monocle is currently a XIAO ESP32-S3 Sense, but the board may change,
 // so connection management stays generic BLE: scan for any peripheral and
@@ -159,6 +172,25 @@ fn encode_wifi_creds(ssid: &str, password: &str) -> Result<Vec<u8>, String> {
     out.extend_from_slice(ssid);
     out.push(password.len() as u8);
     out.extend_from_slice(password);
+    Ok(out)
+}
+
+/// Builds a display payload: `[op][utf-8 text]`.
+///
+/// Rejects anything that would not fit a single ATT write, since the firmware
+/// does not reassemble.
+fn encode_display(op: u8, text: &str) -> Result<Vec<u8>, String> {
+    let bytes = text.as_bytes();
+    if bytes.len() > DISPLAY_TEXT_MAX {
+        return Err(format!(
+            "display text is {} bytes; the maximum is {DISPLAY_TEXT_MAX}",
+            bytes.len()
+        ));
+    }
+
+    let mut out = Vec::with_capacity(1 + bytes.len());
+    out.push(op);
+    out.extend_from_slice(bytes);
     Ok(out)
 }
 
@@ -439,6 +471,7 @@ pub async fn ble_connect(
         .map_err(|err| format!("connected, but service discovery failed: {err}"))?;
 
     watch_wifi_state(&app, &peripheral).await;
+    greet_display(&peripheral).await;
 
     let name = peripheral
         .properties()
@@ -456,6 +489,60 @@ pub async fn ble_connect(
         None,
     );
     Ok(device)
+}
+
+/// Puts a greeting on the monocle's panel as soon as it connects, so the
+/// wearer can see the app took over.
+///
+/// Best effort by design: a device without the characteristic — the stock
+/// `bleprph` example, or a build with no panel attached — connects normally
+/// and simply shows nothing. Failing the connection over a cosmetic write
+/// would be the wrong trade.
+async fn greet_display(peripheral: &Peripheral) {
+    let Some(characteristic) = find_characteristic(peripheral, DISPLAY_CHR_UUID) else {
+        // Worth saying out loud. On macOS this usually means CoreBluetooth is
+        // serving a GATT table it cached before the characteristic existed —
+        // adding one to the firmware does not invalidate a bonded peer's
+        // cache. Forgetting the device in System Settings > Bluetooth forces
+        // a fresh discovery.
+        eprintln!(
+            "ble: no display characteristic on this device — discovered {:?}",
+            peripheral
+                .characteristics()
+                .iter()
+                .map(|c| c.uuid.to_string())
+                .collect::<Vec<_>>()
+        );
+        return;
+    };
+    let Ok(payload) = encode_display(DISPLAY_OP_SET, GREETING) else {
+        return;
+    };
+    if let Err(err) = peripheral
+        .write(&characteristic, &payload, WriteType::WithResponse)
+        .await
+    {
+        eprintln!("ble: could not write the display greeting: {err}");
+    }
+}
+
+/// Replaces what the monocle is showing.
+#[tauri::command]
+pub async fn ble_display_text(
+    app: AppHandle,
+    state: State<'_, BleState>,
+    text: String,
+) -> Result<(), String> {
+    let payload = encode_display(DISPLAY_OP_SET, &text)?;
+    let peripheral = connected_peripheral(&app, &state).await?;
+
+    let characteristic = find_characteristic(&peripheral, DISPLAY_CHR_UUID)
+        .ok_or("this device has no display characteristic — is it running minicole firmware?")?;
+
+    peripheral
+        .write(&characteristic, &payload, WriteType::WithResponse)
+        .await
+        .map_err(|err| format!("failed to write to the display: {err}"))
 }
 
 /// Hands the monocle the network it should join for the Wi-Fi data plane.

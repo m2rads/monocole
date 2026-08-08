@@ -97,14 +97,30 @@ optionally a snapshot of what they're looking at goes along with the query.
    app opens a TCP socket → echo + bulk transfer, with idle teardown and
    `wifi_control` to power the plane back up. Throughput measurement pending on
    hardware; see `ble-examples/bleprph_wifi_coex/test/`.
-5. **Photo path** — capture command over BLE `control` → JPEG over the socket →
+5. **Display** — SSD1306 OLED over I2C, driven by the `display` characteristic.
+   Ordered ahead of the photo path deliberately: it is the only remaining piece
+   on the *output* side, it needs neither PSRAM nor the camera component, and
+   the app already produces tokens — so it closes a demoable loop (type on the
+   Mac, read on the monocle) with no new inference work. It also becomes the
+   debug surface for the harder milestones that follow, replacing a serial
+   cable for connection state and errors. Sub-steps: hardcoded text on the
+   panel first (proves wiring, I2C address, and the real character grid), then
+   the characteristic and the app-side write, then boot and disconnect
+   messages.
+6. **Photo path** — capture command over BLE `control` → JPEG over the socket →
    app verifies CRC and saves it.
-6. **Full loop** — voice → STT → llama.cpp → tokens → monocle display.
+7. **Full loop** — voice → STT → llama.cpp → tokens → monocle display.
 
 `ble.rs` now does scan/connect/disconnect plus the Wi-Fi provisioning writes
 and `wifi_state` subscription; `socket.rs` is the data-plane client. Milestones
-2, 3 and 5 still need new Rust there — see `TODO(monocle-protocol)` and
-`TODO(auto-reconnect)`. Milestone 6 depends on the STT stage, not started.
+2, 3, 5 and 6 still need new Rust there — see `TODO(monocle-protocol)` and
+`TODO(auto-reconnect)`. Milestone 7 depends on the STT stage, not started.
+
+The display hardware is a 4-pin 128×64 SSD1306 I2C module — a stand-in for the
+eventual micro-LED, so nothing should hardcode its dimensions outside the
+renderer. Its driver ships in ESP-IDF (`esp_lcd_panel_ssd1306`); fonts do not,
+so a small ASCII table lives in the firmware. What remains after the greeting
+works is listed under Future work in [protocol.md](protocol.md).
 
 ## Hardware config still to enable
 

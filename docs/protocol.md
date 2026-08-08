@@ -76,9 +76,9 @@ One custom 128-bit service, `83486508-636c-4260-9119-c0ccc2004219`:
 | wifi_creds | `2c9b4a45-…-1f5f2e98db3c` | app → device | write (enc) | **implemented** |
 | wifi_state | `1ad1e743-…-68b4d695ac8b` | device → app | notify | **implemented** |
 | wifi_control | `e4782756-…-8c546a9134f1` | app → device | write (enc) | **implemented** |
+| display | `e474939e-…-4f365b6fe723` | app → device | write (enc) | **implemented** |
 | control | *unassigned* | app → device | write | planned |
 | voice | *unassigned* | device → app | notify | planned |
-| tokens | *unassigned* | app → device | write | planned |
 | status | *unassigned* | device → app | notify | planned |
 
 Implemented UUIDs are frozen: they appear in the firmware's `gatt_svr.c` (as
@@ -137,6 +137,38 @@ radio.
 
 The device also powers itself down on its own idle timer; this characteristic
 is the way back up, and the way to end a burst early.
+
+### display payload
+
+Everything the monocle shows on its panel arrives here. Generated tokens are
+one *use* of this characteristic, not its definition — status lines and errors
+come the same way, which is why it is not called `tokens`.
+
+```
+[op: u8][utf-8 text ...]
+
+0 clear   show nothing
+1 set     replace the screen with this text
+2 append  add to what is already there
+```
+
+`set` covers everything the app does today. `append` exists because streaming
+tokens will arrive a few at a time, and it costs one byte now instead of a
+protocol change later.
+
+One write is one message: the payload must fit a single ATT write (253 bytes
+at the MTU of 256 macOS currently negotiates), and the firmware rejects
+anything longer than its buffer rather than reassembling. There is no
+acknowledgement beyond the ATT write response — the panel is advisory, and a
+dropped line is not worth a retransmission protocol.
+
+Encrypted like the other writes: an unauthenticated peer should not be able to
+put text in front of the wearer's eye.
+
+**Wrapping is the firmware's job for now.** It wraps at its own character width
+so that a long string degrades rather than truncating, and the app sends short
+strings. Once `status` can report panel geometry, wrapping moves to the app —
+see Future work.
 
 ### Voice framing
 
@@ -245,6 +277,31 @@ and notifies `idle` over BLE. `wifi_control` brings it back.
 Sustained-connection Wi-Fi would dominate the power budget and defeat the split
 this protocol is built around. Firmware treats "Wi-Fi is up" as a short-lived
 state, not a session property.
+
+## Future work — from "Connected" to streaming tokens
+
+The first use of `display` is a greeting the app writes on connect. Turning
+that into the real output path needs the following, none of which changes the
+payload format above:
+
+- **Coalesce tokens in the app, don't write per token.** llama.cpp emits a
+  token every few milliseconds; the connection interval is 30 ms. One ATT write
+  per token would saturate the link and outrun the panel, which needs ~25 ms
+  for a full redraw. Batch on a timer (~100–200 ms) and send one `append`.
+- **Panel geometry over `status`**, so the app knows the character grid instead
+  of assuming it. Then wrapping moves from the firmware to the app, and layout
+  can change without a reflash — which matters because this 128×64 OLED is a
+  stand-in for a micro-LED with different dimensions.
+- **Decide what a long answer does.** The panel holds ~168 characters at a 6×8
+  font; a typical reply is 500–2000. Scroll, paginate, or — most likely —
+  constrain generation so answers are monocle-shaped in the first place, which
+  is a system-prompt change rather than a rendering one. This is a product
+  decision and it should be made by looking at real output on the panel.
+- **Say what is happening between question and answer.** Inference takes
+  seconds; a panel that shows the last answer while thinking about the next one
+  is indistinguishable from a frozen one.
+- **Errors belong here too** — no model loaded, generation failed, monocle
+  disconnected. The panel is the only surface the wearer can see.
 
 ## Open questions
 

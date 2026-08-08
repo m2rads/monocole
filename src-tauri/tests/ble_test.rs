@@ -126,6 +126,41 @@ fn wifi_state_rejects_truncated_and_unknown_payloads() {
 }
 
 #[test]
+fn display_payload_leads_with_the_op_byte() {
+    assert_eq!(encode_display(DISPLAY_OP_SET, "hi").unwrap(), b"\x01hi");
+}
+
+#[test]
+fn display_payload_allows_empty_text() {
+    // How `clear` is sent: an op and nothing else.
+    assert_eq!(encode_display(0, "").unwrap(), vec![0]);
+}
+
+#[test]
+fn display_payload_counts_bytes_not_characters() {
+    // A multi-byte character must not be measured as one, or the payload
+    // would overrun what a single ATT write can carry.
+    let text = "é".repeat(DISPLAY_TEXT_MAX / 2);
+    assert_eq!(
+        encode_display(DISPLAY_OP_SET, &text).unwrap().len(),
+        1 + DISPLAY_TEXT_MAX / 2 * 2
+    );
+}
+
+#[test]
+fn display_payload_accepts_exactly_the_maximum() {
+    let text = "x".repeat(DISPLAY_TEXT_MAX);
+    assert!(encode_display(DISPLAY_OP_SET, &text).is_ok());
+}
+
+#[test]
+fn display_payload_rejects_text_too_long_for_one_write() {
+    // Truncating would cut UTF-8 mid-character; splitting is the caller's job.
+    let text = "x".repeat(DISPLAY_TEXT_MAX + 1);
+    assert!(encode_display(DISPLAY_OP_SET, &text).is_err());
+}
+
+#[test]
 fn wifi_event_serializes_camel_case_and_skips_none() {
     let value = serde_json::to_value(WifiEvent {
         kind: "connected",
