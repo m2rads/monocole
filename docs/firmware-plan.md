@@ -68,7 +68,7 @@ optionally a snapshot of what they're looking at goes along with the query.
 - **BluFi.** Provisions credentials only — no data channel, so you open your
   own socket regardless. Assumes Espressif's *mobile* apps and pulls in
   Bluedroid. We own both sides; a custom characteristic is simpler.
-- **SoftAP** as the initial topology. Deferred, not rejected — the Mac loses
+- **SoftAP** as the initial topology. Rejected — the Mac loses
   its own internet while connected. Same data-plane code either way.
 
 ## Throughput essentials
