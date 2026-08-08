@@ -40,8 +40,13 @@ Full wire details in [protocol.md](protocol.md).
   (16 kHz mono, IMA ADPCM, ~64 kbps). Voice is continuous but low-rate, and
   fits inside BLE's ~200 kbps budget on a radio that is already up.
 - **Wi-Fi, on demand** — **JPEG stills only**. Brought up for a burst, torn
-  down after an idle timeout. ~100 KB in tens of milliseconds instead of the
-  1–3 s the same image costs over BLE.
+  down after an idle timeout. ~100 KB in ~600 ms instead of the 1–3 s the same
+  image costs over BLE.
+
+The Wi-Fi figure is measured, not estimated — see [protocol.md](protocol.md),
+Measured throughput. It is ~1.5 Mbps rather than the "tens of milliseconds"
+originally assumed here, because both radios share one antenna. The split
+still wins by 2–5×, which is thinner than the plan was written against.
 
 The handoff replaces BluFi: the app writes credentials to a BLE
 characteristic, the firmware joins and reports its DHCP address back over BLE,

@@ -4,8 +4,11 @@ The contract between the monocle firmware (`firmware/`) and the desktop app
 (`src-tauri/`). Supersedes the old `ble-protocol.md`, which covered only the
 BLE half and assumed media flowed over it.
 
-Status: **draft — UUIDs, ports, and framing not yet frozen.** Update this file
-first when the protocol changes.
+Status: **partly frozen.** The Wi-Fi plane is implemented and verified on
+hardware — the three characteristic UUIDs, port 3333, and the socket framing
+are settled; change them in all three implementations or not at all. The BLE
+characteristics for control, voice, tokens, and status are still unassigned.
+Update this file first when the protocol changes.
 
 ## Two planes
 
@@ -14,7 +17,7 @@ The monocle uses both radios, split by traffic shape rather than by role:
 | | BLE (always on) | Wi-Fi (on demand) |
 |---|---|---|
 | Carries | control, status, tokens, **voice** | **JPEG stills** |
-| Rate | ~64 kbps sustained | ~100 KB bursts |
+| Rate | ~64 kbps sustained | ~100 KB bursts at ~1.5 Mbps (measured) |
 | Duty cycle | continuous while session active | seconds per capture, then radio down |
 | App role | BLE central (`ble.rs`) | TCP client |
 | Device role | BLE peripheral | TCP server |
@@ -25,9 +28,34 @@ Carrying it over Wi-Fi would hold a ~100–200 mA radio up for the whole
 utterance to move a trickle. BLE's radio is already up for control anyway.
 
 **Why images go to Wi-Fi.** A JPEG still is 30–100 KB. Over BLE that is 1–3 s
-per capture; over Wi-Fi it is tens of milliseconds, after which the radio
-powers back down. Images are the only traffic that justifies the second radio,
-and they are bursty enough that its duty cycle stays near ~1%.
+per capture; over Wi-Fi it is ~600 ms, after which the radio powers back down.
+Images are the only traffic that justifies the second radio, and they are
+bursty enough that its duty cycle stays near ~1%.
+
+### Measured throughput
+
+Taken 2026-08-07 on the XIAO ESP32-S3 with BLE connected throughout, by
+`test/test_data_plane.py` against the synthetic bulk endpoint:
+
+| Transfer | Time | Rate |
+|---|---|---|
+| 16 KB | 118 ms | 1.11 Mbps |
+| 100 KB | 529–613 ms | 1.34–1.55 Mbps |
+| 512 KB | 2374 ms | 1.77 Mbps |
+
+**This is an order of magnitude slower than the "tens of milliseconds" this
+document claimed before anyone measured it.** The split still pays — ~600 ms
+against BLE's 1–3 s — but the margin is 2–5×, not 30×, and that is the number
+to design against.
+
+The ceiling is **BLE/Wi-Fi coexistence**, not modem sleep. One 2.4 GHz antenna
+is shared between the two radios, and the driver says so directly when power
+save is disabled for a burst: `Coexist!!! Wi-Fi station would only keep waked
+when available`. Disabling modem sleep during a transfer (which the firmware
+does, per client) bought only ~20%.
+
+Expect this to get *worse* once voice actually streams over BLE rather than
+sitting idle — these numbers are the optimistic case.
 
 **Video is explicitly out of scope.** The consumer of imagery is a multimodal
 LLM that takes still frames. A stream would cost battery and firmware

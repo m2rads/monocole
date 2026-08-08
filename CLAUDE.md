@@ -49,18 +49,26 @@ connection/session management. Full plans live in `docs/`.
 - **Session persistence**: sessions/messages are in-memory only and are lost
   on restart.
 - **Generation cancel**: no stop button; TODO in llama.rs stream_completion.
-- **Monocle protocol**: the wire contract (both planes) is a draft in
-  `docs/protocol.md`. The Wi-Fi provisioning pair (`wifi_creds` write,
-  `wifi_state` notify) is implemented and its UUIDs are **frozen** in three
-  places — firmware `gatt_svr.c`, `src-tauri/src/ble.rs`, and protocol.md.
-  control/voice/tokens/status are still unassigned. No TCP client exists yet.
-  TODO(monocle-protocol) and TODO(auto-reconnect) in ble.rs.
-- **Firmware**: `firmware/` not started. Milestone 1 (advertise + connect) is
-  done via the stock `bleprph` example in `ble-examples/`, which the app
-  connects to unmodified. Decisions: C++ on ESP-IDF v6.0.2, NimBLE, and a
+- **Monocle protocol**: the wire contract lives in `docs/protocol.md`. The
+  Wi-Fi plane (`wifi_creds` write, `wifi_state` notify, `wifi_control` write,
+  and the port-3333 socket framing) is implemented end to end and **frozen**
+  in three places — firmware `gatt_svr.c`, `src-tauri/src/ble.rs` +
+  `socket.rs`, and protocol.md. control/voice/tokens/status are still
+  unassigned. TODO(monocle-protocol) and TODO(auto-reconnect) in ble.rs.
+  Nothing in `src/` calls the Wi-Fi or socket commands yet — they are driven
+  only from the pytest suite.
+- **Firmware**: `firmware/` not started; the working firmware is the forked
+  `ble-examples/bleprph_wifi_coex/`, which still advertises as
+  `nimble-bleprph`. Milestones 1, 2 (partial), and 4 are done: pairing with
+  bonded keys in NVS, provisioning, join, IP reported over BLE, TCP data
+  plane, and idle teardown are all verified on hardware. Voice, camera, and
+  the display are not started. Decisions: C++ on ESP-IDF v6.0.2, NimBLE, and a
   two-plane transport — BLE always-on for control/status/tokens/voice (ADPCM
   ~64kbps), Wi-Fi on-demand for JPEG stills only (LLM consumes stills, not
   video). See docs/firmware-plan.md for rejected alternatives.
+- **Wi-Fi throughput is ~1.5 Mbps, not "tens of milliseconds" per still** —
+  BLE/Wi-Fi coexistence on one antenna is the ceiling, and it will tighten
+  when voice streams. Measured figures in docs/protocol.md.
 - **STT**: voice → text stage (likely whisper.cpp as a second sidecar) not
   started; chat is text-only today.
 - **Model acquisition UX**: curated list + direct .gguf URL download are
