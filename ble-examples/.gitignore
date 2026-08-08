@@ -110,3 +110,6 @@ XUNIT_RESULT*.xml
 .vale/styles/*
 
 sdkconfig
+# menuconfig's backup of the previous sdkconfig — same content, so it carries
+# the same secrets (a Wi-Fi passphrase reached git history through this file).
+sdkconfig.old

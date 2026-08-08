@@ -28,6 +28,7 @@
 #include "bleprph.h"
 
 /* WIFI */
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -213,8 +214,32 @@ static void wifi_prov_init(void)
 }
 
 /**
- * Joins the given network. Called from the GATT write handler once the
- * payload has been validated, and at boot for remembered credentials.
+ * Brings the Wi-Fi driver up if it is currently powered down.
+ *
+ * Blocks inside esp_wifi_start(), so never call this — or anything reaching
+ * it — from the BLE host task.
+ */
+static int wifi_ensure_started(void)
+{
+    esp_err_t err;
+
+    if (s_wifi_started) {
+        return 0;
+    }
+
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed; err=%d", err);
+        return -1;
+    }
+    s_wifi_started = true;
+    return 0;
+}
+
+/**
+ * Joins the given network, powering the radio up first if the idle timer had
+ * taken it down. Called at boot for remembered credentials, and from the
+ * worker task that services a wifi_creds write.
  *
  * Returns 0 if the attempt was started; progress arrives asynchronously as
  * wifi_state notifications.
@@ -224,8 +249,10 @@ int wifi_prov_connect(const char *ssid, const char *pass)
     wifi_config_t wifi_config = { 0 };
     esp_err_t err;
 
-    if (!s_wifi_started) {
-        ESP_LOGE(TAG, "connect requested before the wifi driver was up");
+    /* Provisioning must work regardless of what the power model is doing.
+     * Refusing here is what made every credentials write after an idle
+     * teardown fail with a bare ATT "unlikely error". */
+    if (wifi_ensure_started() != 0) {
         return -1;
     }
 
@@ -290,15 +317,7 @@ int wifi_prov_resume(void)
         return -1;
     }
 
-    if (!s_wifi_started) {
-        esp_err_t err = esp_wifi_start();
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "esp_wifi_start failed; err=%d", err);
-            return -1;
-        }
-        s_wifi_started = true;
-    }
-
+    /* wifi_prov_connect() powers the radio up itself. */
     return wifi_prov_connect(s_ssid, s_pass);
 }
 
@@ -340,6 +359,59 @@ void wifi_prov_request(bool bring_up)
     /* esp_wifi_start/stop can block; the BLE host task must not. */
     xTaskCreate(wifi_cmd_task, "monocle_wifi_cmd", 4096,
                 (void *)(uintptr_t)(bring_up ? 1 : 0), 5, NULL);
+}
+
+/* Credentials in flight between the GATT write handler and the worker task
+ * that acts on them. Heap-allocated per request so a second write cannot
+ * overwrite the first one's passphrase mid-join. */
+struct wifi_join_request {
+    char ssid[MONOCLE_SSID_MAX_LEN + 1];
+    char pass[MONOCLE_PASS_MAX_LEN + 1];
+};
+
+static void wifi_join_task(void *arg)
+{
+    struct wifi_join_request *request = arg;
+
+    if (wifi_prov_connect(request->ssid, request->pass) != 0) {
+        /* The join never got as far as the air, so there is no 802.11
+         * disconnect reason to report. Reason 0 is not a valid one, which
+         * makes it a safe marker for "the device failed locally". */
+        uint8_t local_failure = 0;
+        gatt_svr_notify_wifi_state(MONOCLE_WIFI_FAILED, &local_failure, 1);
+    }
+
+    /* Don't leave the passphrase in freed heap. */
+    memset(request, 0, sizeof *request);
+    free(request);
+    vTaskDelete(NULL);
+}
+
+void wifi_prov_request_join(const char *ssid, const char *pass)
+{
+    struct wifi_join_request *request = calloc(1, sizeof *request);
+
+    if (request == NULL) {
+        ESP_LOGE(TAG, "out of memory; dropped a provisioning request");
+        uint8_t local_failure = 0;
+        gatt_svr_notify_wifi_state(MONOCLE_WIFI_FAILED, &local_failure, 1);
+        return;
+    }
+
+    strlcpy(request->ssid, ssid, sizeof request->ssid);
+    strlcpy(request->pass, pass, sizeof request->pass);
+
+    /* wifi_prov_connect() may have to start the radio, which blocks; the BLE
+     * host task must not. The ATT response therefore means "accepted", and
+     * the outcome arrives as a wifi_state notification. */
+    if (xTaskCreate(wifi_join_task, "monocle_wifi_join", 4096, request, 5,
+                    NULL) != pdPASS) {
+        ESP_LOGE(TAG, "could not start the provisioning task");
+        uint8_t local_failure = 0;
+        gatt_svr_notify_wifi_state(MONOCLE_WIFI_FAILED, &local_failure, 1);
+        memset(request, 0, sizeof *request);
+        free(request);
+    }
 }
 
 void ble_store_config_init(void);
@@ -646,6 +718,28 @@ app_main(void)
     ble_hs_cfg.sync_cb = bleprph_on_sync;
     ble_hs_cfg.gatts_register_cb = gatt_svr_register_cb;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    /* Security. wifi_creds and wifi_control are WRITE_ENC, so the host will
+     * not dispatch a write to us until the link is encrypted — which requires
+     * pairing, and (to survive a reboot) bonding.
+     *
+     * Distributing the LTK in both directions is what lets the app reconnect
+     * silently instead of re-pairing every session; the keys are persisted by
+     * ble_store_config_init() below, which needs CONFIG_BT_NIMBLE_NVS_PERSIST.
+     * Without persistence the chip forgets the bond on every boot while the
+     * Mac keeps believing it is paired, and every encrypted write then fails
+     * with a bare ATT "unlikely error". See docs/protocol.md, Security.
+     *
+     * No I/O capability: the monocle has no keypad or display, so pairing is
+     * "just works". That is unauthenticated — fine for now, worth revisiting
+     * before shipping, since it leaves the passphrase open to an active
+     * man-in-the-middle at pairing time. */
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_our_key_dist |= BLE_SM_PAIR_KEY_DIST_ENC;
+    ble_hs_cfg.sm_their_key_dist |= BLE_SM_PAIR_KEY_DIST_ENC;
 
 #if MYNEWT_VAL(BLE_GATTS)
     int rc;

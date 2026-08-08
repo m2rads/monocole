@@ -59,9 +59,16 @@ void gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
 void gatt_svr_notify_wifi_state(uint8_t state, const void *extra,
                                 uint8_t extra_len);
 
-/* Implemented in main.c; called by the GATT write handler once credentials
- * have been received and validated. Returns 0 on success. */
+/* Implemented in main.c. Joins a network, powering the radio up first if the
+ * idle timer had taken it down. Returns 0 if the attempt started; the outcome
+ * arrives as wifi_state notifications. Blocks — never call it from the BLE
+ * host task; the GATT write handler uses wifi_prov_request_join() instead. */
 int wifi_prov_connect(const char *ssid, const char *pass);
+
+/* Queues a join on a worker task. Called by the GATT write handler once
+ * credentials have been received and validated; the ATT response means the
+ * request was accepted, not that the network was joined. */
+void wifi_prov_request_join(const char *ssid, const char *pass);
 
 /* Re-join using credentials already stored in NVS, powering the radio back
  * up if it was shut down. Returns 0 if the attempt started. */

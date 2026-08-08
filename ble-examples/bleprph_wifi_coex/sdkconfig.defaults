@@ -10,5 +10,16 @@ CONFIG_BT_BLUEDROID_ENABLED=n
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
+# Persist bonding keys in NVS. Without this the chip forgets the bond on every
+# boot while the host still has it, and every write to a WRITE_ENC
+# characteristic (wifi_creds, wifi_control) fails. See ble_hs_cfg in main.c.
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
 # WiFi config
 CONFIG_ESP_WIFI_IRAM_OPT=n
+
+# The XIAO ESP32-S3 has 8 MB; builds otherwise default to 2 MB and the
+# bootloader warns. This belongs here rather than in menuconfig because
+# `idf.py set-target` resets sdkconfig but not sdkconfig.defaults.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"

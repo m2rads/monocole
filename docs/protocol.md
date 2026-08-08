@@ -75,6 +75,11 @@ a single ATT write — no reassembly on either side.
 Lengths are **byte** counts, not character counts, and the firmware validates
 every offset against the length actually received before indexing.
 
+A successful ATT write means the credentials were **accepted**, not that the
+network was joined — the firmware hands them to a worker task, because a join
+may have to power the radio up and the BLE host task must not block. The
+outcome always arrives on `wifi_state`.
+
 ### wifi_state payload
 
 ```
@@ -83,12 +88,17 @@ every offset against the length actually received before indexing.
 0 idle        no credentials yet
 1 connecting  join in progress
 2 connected   + 4 bytes, IPv4 in octet order (a.b.c.d)
-3 failed      + 1 byte, raw 802.11 disconnect reason
+3 failed      + 1 byte, raw 802.11 disconnect reason (0 = local failure)
 ```
 
 Credentials are persisted to NVS only after a join succeeds, so a reboot
 reconnects without the app. Malformed notifications are dropped by the app
 rather than surfaced as a state.
+
+Reason `0` is not a real 802.11 disconnect reason — those start at 1 — so it
+is used for a join that failed on the device before reaching the air (the
+radio would not start, or the request could not be queued). Anything else is
+the chip's own reason code, passed through untouched.
 
 ### wifi_control payload
 

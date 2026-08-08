@@ -17,6 +17,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -315,8 +316,18 @@ static void tcp_server_task(void *arg)
         int nodelay = 1;
         setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof nodelay);
 
+        /* Modem sleep parks the radio between beacons (~100 ms apart), which
+         * costs a stall per frame — the first measurements plateaued around
+         * 1.4 Mbps with tens of ms of dead time per 4 KB. A burst is the one
+         * moment we are deliberately paying for the radio, so stay awake for
+         * it and sleep again as soon as the client goes. The idle wait before
+         * a client arrives keeps its sleep either way. */
+        esp_wifi_set_ps(WIFI_PS_NONE);
+
         ESP_LOGI(TAG, "client connected");
         serve_client(client);
+
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
         shutdown(client, SHUT_RDWR);
         close(client);

@@ -328,13 +328,17 @@ gatt_svr_chr_access_wifi(uint16_t conn_handle, uint16_t attr_handle,
     ESP_LOGI(TAG, "credentials received for SSID \"%s\" (%u-byte key)",
              ssid, pass_len);
 
-    rc = wifi_prov_connect(ssid, pass);
+    /* Hand off rather than join here: this is the BLE host task, and the join
+     * may have to start the radio, which blocks. The write is answered as soon
+     * as the request is accepted; whether the network was actually joined
+     * arrives as a wifi_state notification. */
+    wifi_prov_request_join(ssid, pass);
 
     /* Don't leave the passphrase lying in stack memory after we're done. */
     memset(buf, 0, sizeof buf);
     memset(pass, 0, sizeof pass);
 
-    return rc == 0 ? 0 : BLE_ATT_ERR_UNLIKELY;
+    return 0;
 }
 
 void
