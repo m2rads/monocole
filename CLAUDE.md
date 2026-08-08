@@ -25,6 +25,13 @@ connection/session management. Full plans live in `docs/`.
   (`capabilities/default.json`): everything IPC-heavy is done in Rust, so the
   webview needs no plugin permissions. Only plugin: shell.
 - `ble.rs` is deliberately generic (no service UUIDs) until firmware exists.
+- **Adding a BLE characteristic? Bump `MONOCLE_GATT_VERSION` in firmware
+  `bleprph.h`.** A bonded macOS caches the GATT table forever, so a new
+  characteristic is simply absent from `peripheral.characteristics()` until
+  the device is forgotten — it presents as the app's write doing nothing.
+  Bumping the version makes the firmware send Service Changed on the next
+  connect. Symptom to recognise: `ble: no display characteristic on this
+  device — discovered [...]` listing the *previous* build's UUIDs.
 - The theme provider globally disables CSS transitions during a light/dark
   switch — the animated toggle icons opt out with `!important` utilities.
 

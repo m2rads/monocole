@@ -85,6 +85,14 @@ Implemented UUIDs are frozen: they appear in the firmware's `gatt_svr.c` (as
 `BLE_UUID128_INIT`, byte-reversed) and in `src-tauri/src/ble.rs`. Change them
 in all three places or not at all.
 
+**Adding a characteristic means bumping `MONOCLE_GATT_VERSION` in the
+firmware's `bleprph.h`.** A bonded central caches the attribute table
+indefinitely — on macOS a new characteristic is invisible until the user
+forgets the device, which looks exactly like a bug in whatever was just added.
+The firmware records the version it last announced to each bonded peer and
+sends a Service Changed indication when they differ, which is what prompts
+rediscovery.
+
 `wifi_creds` / `wifi_state` replace BluFi — evaluated and dropped, see
 [firmware-learning-notes.md](firmware-learning-notes.md) §4. Credentials are
 written over an encrypted, bonded link (see Security below), never in the

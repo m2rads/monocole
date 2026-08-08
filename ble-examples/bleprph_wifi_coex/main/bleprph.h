@@ -36,6 +36,25 @@ struct ble_gatt_register_ctxt;
 #define MONOCLE_SSID_MAX_LEN                  32
 #define MONOCLE_PASS_MAX_LEN                  63
 
+/* Where this firmware keeps its own settings, alongside NimBLE's bond store. */
+#define MONOCLE_NVS_NAMESPACE                 "monocle"
+
+/*
+ * ---------------------------------------------------------------------------
+ * BUMP THIS whenever the GATT table changes — a characteristic added, removed,
+ * or reordered.
+ * ---------------------------------------------------------------------------
+ *
+ * A bonded central caches the attribute table and will keep using the cached
+ * copy forever; on macOS a new characteristic is simply invisible until the
+ * user forgets the device. The firmware compares this number against the one
+ * it last announced to each bonded peer and sends a Service Changed indication
+ * when they differ, which is what tells the peer to rediscover.
+ *
+ * Forgetting to bump it looks exactly like a bug in whatever you just added.
+ */
+#define MONOCLE_GATT_VERSION                  2
+
 /* Values reported over the wifi_state characteristic. Keep in sync with
  * WifiState in src-tauri/src/ble.rs and docs/protocol.md. */
 enum monocle_wifi_state {
@@ -53,7 +72,7 @@ int gatt_svr_init(void);
 void gatt_svr_on_connect(uint16_t conn_handle);
 void gatt_svr_on_disconnect(void);
 void gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
-                           int cur_notify);
+                           int cur_notify, int cur_indicate);
 
 /* Push a wifi_state notification. No-op when nobody is subscribed. */
 void gatt_svr_notify_wifi_state(uint8_t state, const void *extra,

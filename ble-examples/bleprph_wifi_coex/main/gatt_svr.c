@@ -24,7 +24,9 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "bleprph.h"
 #include "services/ans/ble_svc_ans.h"
+#include "services/gatt/ble_svc_gatt.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "display.h"
 
 
@@ -99,6 +101,11 @@ static uint16_t gatt_svr_chr_wifi_state_handle;
  * BLE_HS_CONN_HANDLE_NONE means "not connected". */
 static uint16_t gatt_svr_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool gatt_svr_wifi_state_subscribed;
+
+/* Handle of the standard Service Changed characteristic (0x2A05 in the GATT
+ * service, 0x1801), resolved at init. Subscribing to it is a central saying
+ * "tell me when your table moves". */
+static uint16_t s_service_changed_handle;
 
 static int
 gatt_svr_chr_access_sec_test(uint16_t conn_handle, uint16_t attr_handle,
@@ -426,13 +433,83 @@ gatt_svr_on_disconnect(void)
     gatt_svr_wifi_state_subscribed = false;
 }
 
+/*
+ * NVS key naming this peer's last-announced GATT version.
+ *
+ * Keyed per peer because each one caches independently: announcing a change to
+ * the first central that reconnects must not convince us the others have heard
+ * it. NVS keys are limited to 15 characters, which "gv_" plus a 12-character
+ * address uses exactly.
+ */
+static void peer_gatt_version_key(const ble_addr_t *addr, char *out)
+{
+    sprintf(out, "gv_%02x%02x%02x%02x%02x%02x",
+            addr->val[5], addr->val[4], addr->val[3],
+            addr->val[2], addr->val[1], addr->val[0]);
+}
+
+/**
+ * Tells a reconnecting central to rediscover, if the GATT table has changed
+ * since it last looked.
+ *
+ * Only bonded peers need this: an unbonded one discovered the table fresh this
+ * session, so it is already current.
+ */
+static void announce_gatt_change(uint16_t conn_handle)
+{
+    struct ble_gap_conn_desc desc;
+    nvs_handle_t nvs;
+    char key[16];
+    uint8_t announced = 0;
+
+    if (ble_gap_conn_find(conn_handle, &desc) != 0 || !desc.sec_state.bonded) {
+        return;
+    }
+
+    peer_gatt_version_key(&desc.peer_id_addr, key);
+
+    if (nvs_open(MONOCLE_NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
+        ESP_LOGW(TAG, "nvs unavailable; cannot track this peer's GATT version");
+        return;
+    }
+    /* Absent means a peer bonded before this was tracked — it has a cache and
+     * has never been told, so 0 is the right default: it forces one
+     * announcement. */
+    if (nvs_get_u8(nvs, key, &announced) != ESP_OK) {
+        announced = 0;
+    }
+
+    if (announced != MONOCLE_GATT_VERSION) {
+        ESP_LOGI(TAG, "gatt table changed for this peer (%u -> %u); "
+                      "indicating service changed",
+                 announced, MONOCLE_GATT_VERSION);
+        ble_svc_gatt_changed(0x0001, 0xffff);
+
+        if (nvs_set_u8(nvs, key, MONOCLE_GATT_VERSION) != ESP_OK ||
+            nvs_commit(nvs) != ESP_OK) {
+            /* Not fatal: we re-announce on the next connection instead, which
+             * costs the peer a rediscovery it did not need. */
+            ESP_LOGW(TAG, "could not record the announced GATT version");
+        }
+    }
+
+    nvs_close(nvs);
+}
+
 void
 gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
-                      int cur_notify)
+                      int cur_notify, int cur_indicate)
 {
     if (attr_handle == gatt_svr_chr_wifi_state_handle) {
         gatt_svr_conn_handle = conn_handle;
         gatt_svr_wifi_state_subscribed = cur_notify != 0;
+    }
+
+    /* Wait for the peer to enable indications before announcing anything —
+     * for a bonded central this arrives as a restore, shortly after
+     * encryption. Sending earlier would be dropped for want of a subscriber. */
+    if (attr_handle == s_service_changed_handle && cur_indicate) {
+        announce_gatt_change(conn_handle);
     }
 }
 
@@ -527,6 +604,19 @@ gatt_svr_init(void)
     rc = ble_gatts_add_svcs(gatt_svr_svcs);
     if (rc != 0) {
         return rc;
+    }
+
+    /* Cache the Service Changed handle so the subscribe callback can spot it
+     * without a lookup per event. */
+    rc = ble_gatts_find_chr(BLE_UUID16_DECLARE(BLE_GATT_SVC_UUID16),
+                            BLE_UUID16_DECLARE(BLE_SVC_GATT_CHR_SERVICE_CHANGED_UUID16),
+                            NULL, &s_service_changed_handle);
+    if (rc != 0) {
+        /* Not fatal, but every future characteristic will then be invisible to
+         * already-bonded centrals until they forget the device. */
+        ESP_LOGW(TAG, "no service changed characteristic; peers will not be "
+                      "told when the GATT table changes");
+        s_service_changed_handle = 0;
     }
 
     return 0;

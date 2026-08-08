@@ -53,7 +53,6 @@
 #define EXAMPLE_PLACEHOLDER_SSID   "myssid"
 
 /* Where remembered credentials live, so a reboot doesn't need the app. */
-#define MONOCLE_NVS_NAMESPACE      "monocle"
 #define MONOCLE_NVS_KEY_SSID       "wifi_ssid"
 #define MONOCLE_NVS_KEY_PASS       "wifi_pass"
 
@@ -624,7 +623,8 @@ bleprph_gap_event(struct ble_gap_event *event, void *arg)
                     event->subscribe.cur_indicate);
         gatt_svr_on_subscribe(event->subscribe.conn_handle,
                               event->subscribe.attr_handle,
-                              event->subscribe.cur_notify);
+                              event->subscribe.cur_notify,
+                              event->subscribe.cur_indicate);
         return 0;
 
     case BLE_GAP_EVENT_MTU:
