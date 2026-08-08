@@ -164,11 +164,14 @@ come the same way, which is why it is not called `tokens`.
 tokens will arrive a few at a time, and it costs one byte now instead of a
 protocol change later.
 
-One write is one message: the payload must fit a single ATT write (253 bytes
-at the MTU of 256 macOS currently negotiates), and the firmware rejects
-anything longer than its buffer rather than reassembling. There is no
-acknowledgement beyond the ATT write response — the panel is advisory, and a
-dropped line is not worth a retransmission protocol.
+One write is one message. An ATT write request carries `MTU - 3` bytes of
+value — 253 at the MTU of 256 macOS currently negotiates — and the op byte is
+one of them, so **252 bytes of text** is the limit. The firmware rejects
+anything longer rather than reassembling, and the app splits rather than
+truncating, since a cut in the middle of a UTF-8 character loses exactly what
+the wearer was meant to read. There is no acknowledgement beyond the ATT write
+response — the panel is advisory, and a dropped line is not worth a
+retransmission protocol.
 
 Encrypted like the other writes: an unauthenticated peer should not be able to
 put text in front of the wearer's eye.

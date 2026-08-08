@@ -33,9 +33,9 @@ enum display_op {
     DISPLAY_OP_APPEND = 2,   /* add to what is there; how tokens will stream */
 };
 
-/* Longest text one write can carry: a single ATT write at the MTU macOS
- * negotiates (256), minus the op byte. */
-#define DISPLAY_TEXT_MAX    253
+/* Longest text one write can carry. An ATT write request holds MTU-3 bytes of
+ * value (253 at the 256 macOS negotiates), and the op byte is one of them. */
+#define DISPLAY_TEXT_MAX    252
 
 /* Brings up I2C and the panel, and starts the render task. Call once, at
  * boot, before anything posts to it. */

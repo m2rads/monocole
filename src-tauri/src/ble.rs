@@ -35,10 +35,11 @@ const PASS_MAX_LEN: usize = 63;
 // Display ops, mirroring `enum display_op` in the firmware's display.h.
 const DISPLAY_OP_SET: u8 = 1;
 
-// One ATT write at the MTU macOS negotiates (256), minus the op byte. Longer
-// text is the caller's job to split — truncating here would cut UTF-8
+// An ATT write request carries MTU-3 bytes of value — 253 at the 256 macOS
+// negotiates — and the op byte is one of them, so 252 bytes of text fit.
+// Longer text is the caller's job to split: truncating here would cut UTF-8
 // mid-character and silently lose what the wearer was meant to read.
-const DISPLAY_TEXT_MAX: usize = 253;
+const DISPLAY_TEXT_MAX: usize = 252;
 
 // What the panel shows once the app takes over. Matches the shape of the
 // firmware's own boot and disconnect messages.

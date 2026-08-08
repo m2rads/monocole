@@ -148,9 +148,13 @@ fn display_payload_counts_bytes_not_characters() {
 }
 
 #[test]
-fn display_payload_accepts_exactly_the_maximum() {
+fn display_payload_at_the_maximum_fits_one_att_write() {
+    // An ATT write request carries MTU-3 = 253 bytes of value at the MTU of
+    // 256 macOS negotiates, and the op byte is one of them. A limit set one
+    // byte higher builds a payload that cannot be written at all.
     let text = "x".repeat(DISPLAY_TEXT_MAX);
-    assert!(encode_display(DISPLAY_OP_SET, &text).is_ok());
+    let payload = encode_display(DISPLAY_OP_SET, &text).unwrap();
+    assert_eq!(payload.len(), 253);
 }
 
 #[test]

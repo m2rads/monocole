@@ -64,9 +64,15 @@ matches (`--device-name`, default `nimble-bleprph`).
 - **Notification hygiene** — the recorder decodes every frame as it arrives, so
   a malformed notification fails the test at the point it is emitted.
 
-`protocol.py` is an independent implementation of the wire format. It is
-deliberately not shared with the firmware or the Rust app, so that a drift on
-either side fails a test instead of being mirrored into it.
+- **Display** — the characteristic is write-only and unreadable, full-size
+  writes land in one ATT transaction, every undefined op is rejected, and the
+  device still serves GATT after being fed all of them. A visible display
+  characteristic also proves the Service Changed mechanism works: a bonded
+  central with a stale cache would not see it at all.
+
+`protocol.py` and `display.py` are independent implementations of the wire
+formats. They are deliberately not shared with the firmware or the Rust app, so
+that a drift on either side fails a test instead of being mirrored into it.
 
 ## Not covered here
 
@@ -78,6 +84,11 @@ either side fails a test instead of being mirrored into it.
 - **NVS persistence across reboot.** Needs a power cycle. Verify manually: with
   nothing connected, the log should show `using stored credentials for SSID …`
   at boot.
+- **What is actually on the panel.** The display characteristic is write-only
+  with no read-back, so nothing here can tell legible text from a blank
+  screen. Look at it after any change to the renderer — particularly a word
+  longer than 21 characters, text past 8 lines, and an append that overflows
+  the 512-byte buffer, where the *oldest* text should scroll off.
 - **Coexistence throughput.** BLE and Wi-Fi sharing one antenna under sustained
   load is milestone 3/4 work; there is nothing to measure until voice or the
   socket exists.
