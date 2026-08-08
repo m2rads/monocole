@@ -177,3 +177,8 @@ The ESP32-S3 is **2.4 GHz only**. It cannot join a 5 GHz network, and it cannot
 log into a captive portal. Public and coworking Wi-Fi typically fails on both
 counts. Use a phone hotspot with "Maximize Compatibility" **on** (forces
 2.4 GHz), or a home router.
+
+To run hardware tests
+```bash
+.venv/bin/python -m pytest -m "hardware and join" --ssid "wifi name" --password "your pass here" -s
+```
