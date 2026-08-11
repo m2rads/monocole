@@ -181,25 +181,150 @@ static const uint8_t FONT_5X7[][FONT_GLYPH_W] = {
     {0x02, 0x01, 0x02, 0x04, 0x02}, /* ~ */
 };
 
-/* Blits one glyph at a character cell. Anything outside the font's range —
- * including the UTF-8 continuation bytes of whatever the app sends — is drawn
- * as '?' rather than dropped, so mojibake looks wrong instead of invisible. */
-static void draw_char(int col, int row, char c)
-{
-    unsigned char ch = (unsigned char)c;
-    int x = col * DISPLAY_CELL_W;
-    int page = row;
+/*
+ * Beyond ASCII: the accented characters French needs, plus the punctuation a
+ * model reaches for when writing it.
+ *
+ * Lowercase has room to spare — the letters sit in rows 2..6, leaving the top
+ * two rows for an accent. Capitals fill rows 0..6, so the accented ones are
+ * shifted down a row and marked in the single row that frees up. That mark can
+ * only be one pixel tall, so É and È differ by which columns it covers rather
+ * than by its slope. Legible, not beautiful; the alternative was dropping the
+ * accent entirely, which changes the word.
+ */
+struct glyph_entry {
+    uint32_t codepoint;
+    uint8_t bits[FONT_GLYPH_W];
+};
 
-    if (ch < FONT_FIRST_CHAR || ch > FONT_LAST_CHAR) {
-        ch = '?';
+static const struct glyph_entry EXTRA_GLYPHS[] = {
+    /* Lowercase, accent in the two free rows above the letter. */
+    {0x00E0, {0x20, 0x55, 0x56, 0x54, 0x78}}, /* à */
+    {0x00E2, {0x20, 0x56, 0x55, 0x56, 0x78}}, /* â */
+    {0x00E4, {0x20, 0x56, 0x54, 0x56, 0x78}}, /* ä */
+    {0x00E7, {0x38, 0x44, 0xC4, 0xC4, 0x20}}, /* ç — cedilla hangs in row 7 */
+    {0x00E8, {0x38, 0x55, 0x56, 0x54, 0x18}}, /* è */
+    {0x00E9, {0x38, 0x54, 0x56, 0x55, 0x18}}, /* é */
+    {0x00EA, {0x38, 0x56, 0x55, 0x56, 0x18}}, /* ê */
+    {0x00EB, {0x38, 0x56, 0x54, 0x56, 0x18}}, /* ë */
+    {0x00EE, {0x00, 0x46, 0x7D, 0x42, 0x00}}, /* î */
+    {0x00EF, {0x00, 0x45, 0x7C, 0x41, 0x00}}, /* ï */
+    {0x00F4, {0x38, 0x46, 0x45, 0x46, 0x38}}, /* ô */
+    {0x00F6, {0x38, 0x46, 0x44, 0x46, 0x38}}, /* ö */
+    {0x00F9, {0x3C, 0x41, 0x42, 0x20, 0x7C}}, /* ù */
+    {0x00FB, {0x3C, 0x42, 0x41, 0x22, 0x7C}}, /* û */
+    {0x00FC, {0x3C, 0x42, 0x40, 0x22, 0x7C}}, /* ü */
+    {0x00FF, {0x0C, 0x52, 0x50, 0x52, 0x3C}}, /* ÿ */
+    {0x0153, {0x38, 0x44, 0x7C, 0x54, 0x18}}, /* œ — a squeeze at this size */
+
+    /* Capitals, letter shifted into rows 1..7 with the mark in row 0. */
+    {0x00C0, {0xFC, 0x23, 0x23, 0x22, 0xFC}}, /* À */
+    {0x00C2, {0xFC, 0x23, 0x23, 0x23, 0xFC}}, /* Â */
+    {0x00C4, {0xFC, 0x23, 0x22, 0x23, 0xFC}}, /* Ä */
+    {0x00C7, {0x3E, 0x41, 0xC1, 0xC1, 0x22}}, /* Ç — room below, so no shift */
+    {0x00C8, {0xFE, 0x93, 0x93, 0x92, 0x82}}, /* È */
+    {0x00C9, {0xFE, 0x92, 0x93, 0x93, 0x82}}, /* É */
+    {0x00CA, {0xFE, 0x93, 0x93, 0x93, 0x82}}, /* Ê */
+    {0x00CB, {0xFE, 0x93, 0x92, 0x93, 0x82}}, /* Ë */
+    {0x00CE, {0x00, 0x83, 0xFF, 0x83, 0x00}}, /* Î */
+    {0x00CF, {0x00, 0x83, 0xFE, 0x83, 0x00}}, /* Ï */
+    {0x00D4, {0x7C, 0x83, 0x83, 0x83, 0x7C}}, /* Ô */
+    {0x00D6, {0x7C, 0x83, 0x82, 0x83, 0x7C}}, /* Ö */
+    {0x00D9, {0x7E, 0x81, 0x81, 0x80, 0x7E}}, /* Ù */
+    {0x00DB, {0x7E, 0x81, 0x81, 0x81, 0x7E}}, /* Û */
+    {0x00DC, {0x7E, 0x81, 0x80, 0x81, 0x7E}}, /* Ü */
+    {0x0152, {0x7C, 0x82, 0xFE, 0x92, 0x82}}, /* Œ */
+
+    /* Punctuation a model writing French will reach for. Without these the
+     * text is peppered with '?' at every quote and apostrophe. */
+    {0x00AB, {0x00, 0x08, 0x14, 0x22, 0x41}}, /* « */
+    {0x00BB, {0x41, 0x22, 0x14, 0x08, 0x00}}, /* » */
+    {0x00B0, {0x00, 0x06, 0x09, 0x09, 0x06}}, /* ° */
+    {0x2018, {0x00, 0x03, 0x05, 0x00, 0x00}}, /* ' */
+    {0x2019, {0x00, 0x05, 0x03, 0x00, 0x00}}, /* ' */
+    {0x201C, {0x00, 0x07, 0x00, 0x07, 0x00}}, /* " */
+    {0x201D, {0x00, 0x07, 0x00, 0x07, 0x00}}, /* " */
+    {0x2013, {0x08, 0x08, 0x08, 0x08, 0x08}}, /* – */
+    {0x2014, {0x08, 0x08, 0x08, 0x08, 0x08}}, /* — */
+    {0x2026, {0x40, 0x00, 0x40, 0x00, 0x40}}, /* … */
+    {0x20AC, {0x14, 0x3E, 0x55, 0x41, 0x22}}, /* € */
+};
+
+/* Resolves a codepoint to a glyph, falling back to '?' so an unsupported
+ * character is visibly wrong rather than silently missing. */
+static const uint8_t *glyph_for(uint32_t codepoint)
+{
+    if (codepoint >= FONT_FIRST_CHAR && codepoint <= FONT_LAST_CHAR) {
+        return FONT_5X7[codepoint - FONT_FIRST_CHAR];
     }
 
-    const uint8_t *glyph = FONT_5X7[ch - FONT_FIRST_CHAR];
+    for (size_t i = 0; i < sizeof EXTRA_GLYPHS / sizeof EXTRA_GLYPHS[0]; i++) {
+        if (EXTRA_GLYPHS[i].codepoint == codepoint) {
+            return EXTRA_GLYPHS[i].bits;
+        }
+    }
+
+    return FONT_5X7['?' - FONT_FIRST_CHAR];
+}
+
+/**
+ * Reads one UTF-8 character, returning how many bytes it used.
+ *
+ * The app sends UTF-8, so anything above ASCII arrives as two or more bytes.
+ * Treating those bytes individually — which is what the panel did before — put
+ * two '?' on screen for every accented letter.
+ *
+ * A malformed sequence consumes one byte and yields '?', so bad input costs a
+ * character rather than desynchronising everything after it.
+ */
+static size_t decode_utf8(const char *text, uint32_t *codepoint)
+{
+    const unsigned char *p = (const unsigned char *)text;
+
+    if (p[0] < 0x80) {
+        *codepoint = p[0];
+        return 1;
+    }
+    if ((p[0] & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {
+        *codepoint = ((uint32_t)(p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+        return 2;
+    }
+    if ((p[0] & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+        *codepoint = ((uint32_t)(p[0] & 0x0F) << 12) |
+                     ((uint32_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+        return 3;
+    }
+    if ((p[0] & 0xF8) == 0xF0 && (p[1] & 0xC0) == 0x80 &&
+        (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80) {
+        *codepoint = ((uint32_t)(p[0] & 0x07) << 18) |
+                     ((uint32_t)(p[1] & 0x3F) << 12) |
+                     ((uint32_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+        return 4;
+    }
+
+    *codepoint = '?';
+    return 1;
+}
+
+/* True for anything that separates words. U+00A0 is here because French
+ * typography puts a non-breaking space before ! ? : and », and a model writing
+ * French emits it — as a glyph it would be a '?' in the middle of every
+ * sentence. */
+static bool is_space(uint32_t codepoint)
+{
+    return codepoint == ' ' || codepoint == 0x00A0;
+}
+
+/* Blits one glyph at a character cell. */
+static void draw_glyph(int col, int row, const uint8_t *glyph)
+{
+    int x = col * DISPLAY_CELL_W;
+
     for (int i = 0; i < FONT_GLYPH_W; i++) {
-        s_framebuffer[page * DISPLAY_WIDTH + x + i] = glyph[i];
+        s_framebuffer[row * DISPLAY_WIDTH + x + i] = glyph[i];
     }
     /* The spacing column. */
-    s_framebuffer[page * DISPLAY_WIDTH + x + FONT_GLYPH_W] = 0x00;
+    s_framebuffer[row * DISPLAY_WIDTH + x + FONT_GLYPH_W] = 0x00;
 }
 
 static void flush(void)
@@ -211,14 +336,24 @@ static void flush(void)
                               s_framebuffer);
 }
 
-/* Length of the word starting at `text`, stopping at a space or newline. */
-static int word_length(const char *text)
+/* How many cells the word starting at `text` needs. Counted in characters, not
+ * bytes: an accented word is shorter on screen than it is in memory, and
+ * measuring it in bytes would wrap it a column early. */
+static int word_cells(const char *text)
 {
-    int len = 0;
-    while (text[len] != '\0' && text[len] != ' ' && text[len] != '\n') {
-        len++;
+    int cells = 0;
+
+    while (*text != '\0') {
+        uint32_t codepoint;
+        size_t used = decode_utf8(text, &codepoint);
+
+        if (is_space(codepoint) || codepoint == '\n') {
+            break;
+        }
+        cells++;
+        text += used;
     }
-    return len;
+    return cells;
 }
 
 /**
@@ -242,28 +377,31 @@ static size_t render(const char *text)
     }
 
     while (*text != '\0' && row < DISPLAY_ROWS) {
-        if (*text == '\n') {
+        uint32_t codepoint;
+        size_t used = decode_utf8(text, &codepoint);
+
+        if (codepoint == '\n') {
             col = 0;
             row++;
-            text++;
+            text += used;
             continue;
         }
 
-        if (*text == ' ') {
+        if (is_space(codepoint)) {
             /* A space that would start a line is swallowed, so wrapped text
              * does not begin with a gap. */
             if (col > 0 && col < DISPLAY_COLS) {
-                draw_char(col, row, ' ');
+                draw_glyph(col, row, glyph_for(' '));
                 col++;
             }
-            text++;
+            text += used;
             continue;
         }
 
         /* Move the whole word down if it fits on a line of its own; a word
          * longer than the panel is broken mid-way instead, which beats
          * dropping it. */
-        int word = word_length(text);
+        int word = word_cells(text);
         if (col > 0 && col + word > DISPLAY_COLS && word <= DISPLAY_COLS) {
             col = 0;
             row++;
@@ -276,9 +414,9 @@ static size_t render(const char *text)
             continue;
         }
 
-        draw_char(col, row, *text);
+        draw_glyph(col, row, glyph_for(codepoint));
         col++;
-        text++;
+        text += used;
     }
 
     flush();

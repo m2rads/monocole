@@ -94,6 +94,11 @@ that a drift on either side fails a test instead of being mirrored into it.
   still paging (the reader should jump back to the top), and an answer past
   4 KB, where the front of the buffer drops and the reader's place should shift
   with it rather than jumping.
+- **Accented glyphs.** Ask the model something in French and read it. The
+  lowercase accents have two clear rows to sit in; the capitals are shifted
+  down with a one-pixel mark, so `É` and `È` differ only by which columns it
+  covers — check they are still tellable apart. `œ` and `Œ` are a squeeze at
+  5×7 and are the most likely to look wrong.
 - **Coexistence throughput.** BLE and Wi-Fi sharing one antenna under sustained
   load is milestone 3/4 work; there is nothing to measure until voice or the
   socket exists.

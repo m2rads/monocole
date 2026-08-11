@@ -181,6 +181,17 @@ so that a long string degrades rather than truncating, and the app sends short
 strings. Once `status` can report panel geometry, wrapping moves to the app —
 see Future work.
 
+**Character set: ASCII plus what French needs** — the accented letters in both
+cases, `œ`/`Œ`, guillemets, curly quotes, dashes, `…`, `°`, `€`, and U+00A0,
+which French typography puts before `! ? :` and `»`. The firmware decodes
+UTF-8 properly, so a character is one cell however many bytes it occupies.
+Anything outside that set draws as `?` — visibly wrong rather than silently
+missing. Adding a language means adding glyphs to `EXTRA_GLYPHS` in
+`display.c`, nothing more.
+
+Note the size limit is in **bytes**, so accented text fits fewer characters per
+write. The app splits on character boundaries, never mid-sequence.
+
 ### Voice framing
 
 `[seq: u16][adpcm payload]` — 16 kHz mono source, IMA ADPCM (4-bit/sample,
