@@ -45,6 +45,11 @@ esp_err_t display_init(void);
  * host task, which must never block on I2C. Rendering happens later on the
  * display task; a full update takes ~25 ms.
  *
+ * Text longer than the panel is paginated rather than cut off: the first
+ * screenful goes up, and the rest follows a page at a time, each held long
+ * enough to read. `set` and `clear` return the reader to the top; `append`
+ * leaves their place alone, so generation can run ahead of reading.
+ *
  * Returns false if the queue is full, which drops the update: the panel is
  * advisory, and blocking a caller to guarantee a frame is the wrong trade. */
 bool display_post(uint8_t op, const char *text, size_t len);

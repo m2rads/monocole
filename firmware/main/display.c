@@ -40,10 +40,25 @@ static const char *TAG = "monocle_display";
 #define DISPLAY_PAGES           (DISPLAY_HEIGHT / 8)
 #define DISPLAY_FB_LEN          (DISPLAY_WIDTH * DISPLAY_PAGES)
 
-/* Backing store for what is on screen. Larger than one write so `append` has
- * somewhere to accumulate; a few screenfuls is plenty, since nothing can be
- * scrolled back to. */
-#define DISPLAY_TEXT_BUFFER     512
+/* Backing store for the whole response, not just what fits on screen: a reply
+ * runs 500-2000 characters and the reader is walked through it a page at a
+ * time. Overflow drops from the front, which is only reachable by an answer
+ * longer than this. */
+#define DISPLAY_TEXT_BUFFER     4096
+
+/*
+ * How long a full page stays up before the next one replaces it.
+ *
+ * Proportional to how much is actually on the page — two lines do not need the
+ * dwell of eight. Roughly 250 words per minute is 20 ms per character; the
+ * doubled figure leaves room to look away and back, which is the normal way
+ * someone uses a monocle.
+ *
+ * There is no way to go back. Erring long is the safer mistake.
+ */
+#define PAGE_HOLD_BASE_MS       2000
+#define PAGE_HOLD_PER_CHAR_MS   40
+#define PAGE_HOLD_MAX_MS        8000
 
 /* Shallow, and deliberately so: if updates are arriving faster than the panel
  * can draw them, the newest matters and the backlog does not. */
@@ -206,8 +221,16 @@ static int word_length(const char *text)
     return len;
 }
 
-static void render(const char *text)
+/**
+ * Draws one screenful starting at `text`.
+ *
+ * Returns how many bytes were consumed, which is where the next page begins.
+ * Pagination has to live here rather than in the app: a page boundary is a
+ * line boundary, and only this function knows where the lines break.
+ */
+static size_t render(const char *text)
 {
+    const char *start = text;
     int col = 0;
     int row = 0;
 
@@ -215,7 +238,7 @@ static void render(const char *text)
 
     if (text == NULL) {
         flush();
-        return;
+        return 0;
     }
 
     while (*text != '\0' && row < DISPLAY_ROWS) {
@@ -259,6 +282,7 @@ static void render(const char *text)
     }
 
     flush();
+    return (size_t)(text - start);
 }
 
 /*
@@ -270,18 +294,64 @@ static void render(const char *text)
 static char s_text[DISPLAY_TEXT_BUFFER];
 static size_t s_text_len;
 
+/* Where the visible page starts in s_text, and how much of it is on screen.
+ * Together they say what has been read and what is still waiting. */
+static size_t s_page_start;
+static size_t s_page_len;
+
+static void show_page(void)
+{
+    s_page_len = render(s_text + s_page_start);
+}
+
+/* True when the response runs past the bottom of the current page. */
+static bool more_to_show(void)
+{
+    return s_page_start + s_page_len < s_text_len;
+}
+
+static TickType_t page_hold_ticks(void)
+{
+    uint32_t ms = PAGE_HOLD_BASE_MS + s_page_len * PAGE_HOLD_PER_CHAR_MS;
+
+    if (ms > PAGE_HOLD_MAX_MS) {
+        ms = PAGE_HOLD_MAX_MS;
+    }
+    return pdMS_TO_TICKS(ms);
+}
+
+static void advance_page(void)
+{
+    if (!more_to_show()) {
+        return;
+    }
+
+    /* A page that draws nothing while text remains would leave the cursor
+     * stuck here forever; step over a byte so it always makes progress. */
+    s_page_start += s_page_len > 0 ? s_page_len : 1;
+    show_page();
+}
+
 static void apply(const struct display_msg *msg)
 {
+    /* Appending only changes the screen when the last page is the visible one.
+     * While the reader is still on an earlier page, new tokens land out of
+     * sight and redrawing would only cost I2C and flicker. */
+    bool showing_tail = s_page_start + s_page_len >= s_text_len;
+
     switch (msg->op) {
     case DISPLAY_OP_CLEAR:
         s_text_len = 0;
         s_text[0] = '\0';
+        s_page_start = 0;
         break;
 
     case DISPLAY_OP_SET:
         s_text_len = msg->len < sizeof s_text - 1 ? msg->len : sizeof s_text - 1;
         memcpy(s_text, msg->text, s_text_len);
         s_text[s_text_len] = '\0';
+        /* A new response starts at the top. */
+        s_page_start = 0;
         break;
 
     case DISPLAY_OP_APPEND:
@@ -290,9 +360,13 @@ static void apply(const struct display_msg *msg)
             size_t overflow = s_text_len + msg->len - (sizeof s_text - 1);
             if (overflow >= s_text_len) {
                 s_text_len = 0;
+                s_page_start = 0;
             } else {
                 memmove(s_text, s_text + overflow, s_text_len - overflow);
                 s_text_len -= overflow;
+                /* Everything shifted down by `overflow`; move the reader's
+                 * place with it rather than jumping them forward. */
+                s_page_start = s_page_start > overflow ? s_page_start - overflow : 0;
             }
         }
         size_t room = sizeof s_text - 1 - s_text_len;
@@ -300,6 +374,10 @@ static void apply(const struct display_msg *msg)
         memcpy(s_text + s_text_len, msg->text, take);
         s_text_len += take;
         s_text[s_text_len] = '\0';
+
+        if (!showing_tail) {
+            return;     /* out of view; the page timer will get to it */
+        }
         break;
 
     default:
@@ -307,17 +385,25 @@ static void apply(const struct display_msg *msg)
         return;
     }
 
-    render(s_text);
+    show_page();
 }
 
 static void display_task(void *arg)
 {
     struct display_msg msg;
 
-    while (xQueueReceive(s_queue, &msg, portMAX_DELAY) == pdTRUE) {
-        apply(&msg);
+    for (;;) {
+        /* Block indefinitely when everything fits — the panel is finished, and
+         * only a new write has anything to say. Otherwise wake up to turn the
+         * page. */
+        TickType_t wait = more_to_show() ? page_hold_ticks() : portMAX_DELAY;
+
+        if (xQueueReceive(s_queue, &msg, wait) == pdTRUE) {
+            apply(&msg);
+        } else {
+            advance_page();
+        }
     }
-    vTaskDelete(NULL);
 }
 
 bool display_post(uint8_t op, const char *text, size_t len)

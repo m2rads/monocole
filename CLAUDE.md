@@ -71,10 +71,14 @@ connection/session management. Full plans live in `docs/`.
   connect. Text goes over BLE, never the socket, because waking Wi-Fi costs
   ~1.5 s regardless of payload size. Generated tokens are mirrored to the panel
   by `monocle.rs`, which batches them on a 150 ms timer — never write per
-  token, it outruns both the link and the ~25 ms redraw. Panel geometry is
-  21×8 characters; only `display.c` should know that. **Still open**: geometry
-  over `status` so wrapping can move app-side, and what a long answer does
-  (168 characters fit). See Future work in protocol.md.
+  token, it outruns both the link and the ~25 ms redraw. A reply longer than
+  the panel is **paginated in the firmware** — `display.c` holds the whole
+  response and advances a page at a time, dwelling 2 s + 40 ms/char (max 8 s).
+  Pagination and wrapping both belong there because a page break is a line
+  break, and only the renderer knows where lines fall; panel geometry is 21×8
+  and nothing outside `display.c` should assume it. **Still open**: geometry
+  over `status`, and no way for the wearer to page back. See Future work in
+  protocol.md.
 - **Firmware**: `firmware/` not started; the working firmware is the forked
   `ble-examples/bleprph_wifi_coex/`, which still advertises as
   `nimble-bleprph`. Milestones 1, 2 (partial), and 4 are done: pairing with

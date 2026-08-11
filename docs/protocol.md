@@ -299,18 +299,28 @@ payload format above:
   tokens on a 150 ms timer and sends one write per batch: `set` for the first
   (replacing a `...` thinking indicator), `append` thereafter. Writing per
   token would saturate the link and outrun the panel's ~25 ms redraw.
+- ~~Decide what a long answer does~~ — **paginated, in the firmware.** The panel
+  holds ~168 characters and a reply runs 500–2000, so `display.c` keeps the
+  whole response and walks the reader through it a page at a time. The dwell is
+  proportional to how much is on the page (2 s plus 40 ms per character, capped
+  at 8 s) because two lines do not need the time eight do.
+
+  Pagination has to live in the firmware: a page boundary is a line boundary,
+  and only the renderer knows where lines break. Doing it app-side would mean a
+  second copy of the wrapping algorithm that has to agree forever.
+
+  **The reader cannot go back** — there is no input on the device — so the
+  dwell errs long. A gesture or button to hold and step is the eventual answer.
+  Constraining generation so answers are monocle-shaped in the first place is
+  still worth doing, and is a system-prompt change rather than a rendering one.
 - **Panel geometry over `status`**, so the app knows the character grid instead
-  of assuming it. Then wrapping moves from the firmware to the app, and layout
-  can change without a reflash — which matters because this 128×64 OLED is a
-  stand-in for a micro-LED with different dimensions.
-- **Decide what a long answer does.** The panel holds ~168 characters at a 6×8
-  font; a typical reply is 500–2000. Scroll, paginate, or — most likely —
-  constrain generation so answers are monocle-shaped in the first place, which
-  is a system-prompt change rather than a rendering one. This is a product
-  decision and it should be made by looking at real output on the panel.
-- **Say what is happening between question and answer.** Inference takes
-  seconds; a panel that shows the last answer while thinking about the next one
-  is indistinguishable from a frozen one.
+  of assuming it. Less urgent now that wrapping *and* pagination are both
+  firmware-side, but still wanted for anything that needs to lay out text —
+  this 128×64 OLED is a stand-in for a micro-LED with different dimensions.
+- ~~Say what is happening between question and answer~~ — **done.** The app
+  puts `...` up when a generation starts, replaced by the first batch of
+  tokens. Inference takes seconds, and a panel still showing the last answer is
+  indistinguishable from a frozen one.
 - **Errors belong here too** — no model loaded, generation failed, monocle
   disconnected. The panel is the only surface the wearer can see.
 

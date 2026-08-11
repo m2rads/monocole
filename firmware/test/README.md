@@ -87,8 +87,13 @@ that a drift on either side fails a test instead of being mirrored into it.
 - **What is actually on the panel.** The display characteristic is write-only
   with no read-back, so nothing here can tell legible text from a blank
   screen. Look at it after any change to the renderer — particularly a word
-  longer than 21 characters, text past 8 lines, and an append that overflows
-  the 512-byte buffer, where the *oldest* text should scroll off.
+  longer than 21 characters, and text past 8 lines.
+- **Pagination.** Same reason, and the timing only means something to a person
+  reading it. Worth eyeballing: a two-page answer (does the second page arrive
+  before you finish the first?), a new response arriving while an old one is
+  still paging (the reader should jump back to the top), and an answer past
+  4 KB, where the front of the buffer drops and the reader's place should shift
+  with it rather than jumping.
 - **Coexistence throughput.** BLE and Wi-Fi sharing one antenna under sustained
   load is milestone 3/4 work; there is nothing to measure until voice or the
   socket exists.
