@@ -36,7 +36,7 @@ serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 reqwest = { version = "0.12", features = ["stream", "json"] }
-tokio = { version = "1", features = ["fs", "io-util", "net", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "time"] }
 futures-util = "0.3"
 btleplug = "0.11"
 uuid = "1"
@@ -44,7 +44,9 @@ uuid = "1"
 [dev-dependencies]
 tempfile = "3"
 tiny_http = "0.12"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# test-util provides the paused clock the token-mirroring tests use, so the
+# flush interval is deterministic instead of a race against the test host.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]
 # by default Tauri runs in production mode

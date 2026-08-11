@@ -69,11 +69,12 @@ connection/session management. Full plans live in `docs/`.
   sides are built: `main/display.c` renders on its own task (never render in
   the BLE callback — I2C is ~25 ms), and `ble.rs` writes a greeting on
   connect. Text goes over BLE, never the socket, because waking Wi-Fi costs
-  ~1.5 s regardless of payload size. **Still to do**: token streaming — use
-  `append`, coalesced on a ~100–200 ms timer rather than one write per token,
-  and nothing calls `ble_display_text` from `src/` yet. Panel geometry is
-  21×8 characters; only `display.c` should know that. See Future work in
-  protocol.md.
+  ~1.5 s regardless of payload size. Generated tokens are mirrored to the panel
+  by `monocle.rs`, which batches them on a 150 ms timer — never write per
+  token, it outruns both the link and the ~25 ms redraw. Panel geometry is
+  21×8 characters; only `display.c` should know that. **Still open**: geometry
+  over `status` so wrapping can move app-side, and what a long answer does
+  (168 characters fit). See Future work in protocol.md.
 - **Firmware**: `firmware/` not started; the working firmware is the forked
   `ble-examples/bleprph_wifi_coex/`, which still advertises as
   `nimble-bleprph`. Milestones 1, 2 (partial), and 4 are done: pairing with

@@ -33,13 +33,14 @@ const SSID_MAX_LEN: usize = 32;
 const PASS_MAX_LEN: usize = 63;
 
 // Display ops, mirroring `enum display_op` in the firmware's display.h.
-const DISPLAY_OP_SET: u8 = 1;
+pub(crate) const DISPLAY_OP_SET: u8 = 1;
+pub(crate) const DISPLAY_OP_APPEND: u8 = 2;
 
 // An ATT write request carries MTU-3 bytes of value — 253 at the 256 macOS
 // negotiates — and the op byte is one of them, so 252 bytes of text fit.
 // Longer text is the caller's job to split: truncating here would cut UTF-8
 // mid-character and silently lose what the wearer was meant to read.
-const DISPLAY_TEXT_MAX: usize = 252;
+pub(crate) const DISPLAY_TEXT_MAX: usize = 252;
 
 // What the panel shows once the app takes over. Matches the shape of the
 // firmware's own boot and disconnect messages.
@@ -103,6 +104,15 @@ struct StatusEvent {
     /// For scanStopped: "timeout" when the scan hit its TTL.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+}
+
+impl BleState {
+    /// Whether a monocle is connected right now. Callers that treat the device
+    /// as optional check this rather than attempting a write and handling the
+    /// failure.
+    pub(crate) fn is_connected(&self) -> bool {
+        self.connected.lock().unwrap().is_some()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -527,15 +537,19 @@ async fn greet_display(peripheral: &Peripheral) {
     }
 }
 
-/// Replaces what the monocle is showing.
-#[tauri::command]
-pub async fn ble_display_text(
-    app: AppHandle,
-    state: State<'_, BleState>,
-    text: String,
+/// Sends one display op to the connected monocle.
+///
+/// Errors when nothing is connected or the device has no panel, so callers
+/// that treat the display as optional — token mirroring, say — can decide for
+/// themselves whether to care.
+pub(crate) async fn write_display(
+    app: &AppHandle,
+    state: &BleState,
+    op: u8,
+    text: &str,
 ) -> Result<(), String> {
-    let payload = encode_display(DISPLAY_OP_SET, &text)?;
-    let peripheral = connected_peripheral(&app, &state).await?;
+    let payload = encode_display(op, text)?;
+    let peripheral = connected_peripheral(app, state).await?;
 
     let characteristic = find_characteristic(&peripheral, DISPLAY_CHR_UUID)
         .ok_or("this device has no display characteristic — is it running minicole firmware?")?;
@@ -544,6 +558,16 @@ pub async fn ble_display_text(
         .write(&characteristic, &payload, WriteType::WithResponse)
         .await
         .map_err(|err| format!("failed to write to the display: {err}"))
+}
+
+/// Replaces what the monocle is showing.
+#[tauri::command]
+pub async fn ble_display_text(
+    app: AppHandle,
+    state: State<'_, BleState>,
+    text: String,
+) -> Result<(), String> {
+    write_display(&app, &state, DISPLAY_OP_SET, &text).await
 }
 
 /// Hands the monocle the network it should join for the Wi-Fi data plane.

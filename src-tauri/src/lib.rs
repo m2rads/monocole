@@ -2,6 +2,7 @@ pub mod ble;
 pub mod llama;
 pub mod manifest;
 pub mod models;
+pub mod monocle;
 pub mod socket;
 
 #[cfg(test)]

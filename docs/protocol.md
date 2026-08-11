@@ -295,10 +295,10 @@ The first use of `display` is a greeting the app writes on connect. Turning
 that into the real output path needs the following, none of which changes the
 payload format above:
 
-- **Coalesce tokens in the app, don't write per token.** llama.cpp emits a
-  token every few milliseconds; the connection interval is 30 ms. One ATT write
-  per token would saturate the link and outrun the panel, which needs ~25 ms
-  for a full redraw. Batch on a timer (~100–200 ms) and send one `append`.
+- ~~Coalesce tokens in the app~~ — **done.** `src-tauri/src/monocle.rs` batches
+  tokens on a 150 ms timer and sends one write per batch: `set` for the first
+  (replacing a `...` thinking indicator), `append` thereafter. Writing per
+  token would saturate the link and outrun the panel's ~25 ms redraw.
 - **Panel geometry over `status`**, so the app knows the character grid instead
   of assuming it. Then wrapping moves from the firmware to the app, and layout
   can change without a reflash — which matters because this 128×64 OLED is a

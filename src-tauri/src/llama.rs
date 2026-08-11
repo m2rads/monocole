@@ -10,7 +10,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
-use crate::models;
+use crate::{models, monocle};
 
 pub const CHAT_EVENT: &str = "chat-stream";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -218,8 +218,18 @@ async fn run_chat_stream(
     messages: Vec<ChatMessage>,
 ) -> Result<(), String> {
     let port = ensure_running(app, state).await?;
+
+    // Mirrors the reply to the monocle's panel, if one is connected. Held for
+    // the duration of the stream: dropping it — including on the `?` above
+    // failing later, or an early return — flushes the last tokens and ends the
+    // mirror task.
+    let mirror = monocle::start(app);
+
     stream_completion(port, &messages, |event| match event {
-        StreamEvent::Token(token) => emit(app, session_id, "token", Some(token), None),
+        StreamEvent::Token(token) => {
+            mirror.push(&token);
+            emit(app, session_id, "token", Some(token), None)
+        }
         StreamEvent::Done => emit(app, session_id, "done", None, None),
     })
     .await
