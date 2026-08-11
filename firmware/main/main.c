@@ -714,7 +714,7 @@ app_main(void)
      * that might want to report a problem on it. A missing display is logged
      * and otherwise ignored — the rest of the device still works headless. */
     if (display_init() == ESP_OK) {
-        display_show("minicole\nwaiting for app");
+        display_show("minicole\nconnect to app to continue");
     }
 
     /* Bring the radio up but stay unassociated: which network we join is the
