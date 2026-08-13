@@ -1,61 +1,66 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-S3 | ESP32-S31 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- |
+# Monocle firmware
 
-# BLE Peripheral with ICMP Echo-Reply
+Runs on a Seeed XIAO ESP32-S3 Sense. Talks to the desktop app over BLE, brings
+Wi-Fi up on demand for bulk transfers, and drives the OLED the wearer reads.
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+Forked from ESP-IDF's `bluetooth/nimble/bleprph_wifi_coex` and rewritten; the
+NimBLE scaffolding and the Apache headers are what remain of it.
 
-This example aims to run `ping` network utility along with BLE GATT server simultaneously using NimBLE host stack. It is a combination of 2 examples in IDF: `bluetooth/nimble/bleprph` and `protocols/icmp_echo`. See the README.md files of these examples to know more about them.
+- The wire contract is [`docs/protocol.md`](../docs/protocol.md). **Update it
+  before changing anything on the air.**
+- Decisions, rejected alternatives and milestones are in
+  [`docs/firmware-plan.md`](../docs/firmware-plan.md).
+- Toolchain setup and flashing help are in
+  [`docs/firmware-setup.md`](../docs/firmware-setup.md).
 
-### BLE peripheral
+## Build and flash
 
-This example creates GATT server and then starts advertising, waiting to be connected to a GATT client.
-
-It uses ESP32's Bluetooth controller and NimBLE stack based BLE host.
-
-### ICMP Echo-Reply
-
-Ping is a useful network utility used to test if a remote host is reachable on the IP network. It measures the round-trip time for messages sent from the source host to a destination target that are echoed back to the source.
-
-Ping operates by sending Internet Control Message Protocol (ICMP) echo request packets to the target host and waiting for an ICMP echo reply.
-
-**Notes:** Currently this example only supports IPv4.
-
-## How to Use Example
-
-Before project configuration and build, be sure to set the correct chip target using:
+Needs ESP-IDF v6.0.2 on the path:
 
 ```bash
-idf.py set-target <chip_name>
+. ~/.espressif/v6.0.2/esp-idf/export.sh
+idf.py build
+idf.py -p /dev/cu.usbmodem3101 flash monitor      # port varies; ls /dev/cu.*
 ```
 
-### Configure the project
+The target is `esp32s3` — **no hyphen**. `esp32-s3` fails quietly, leaves the
+target at `esp32`, and surfaces later as `--chip;esp32` in a flash error.
 
-Open the project configuration menu: 
+`idf.py set-target` resets `sdkconfig`, so anything that must survive belongs
+in `sdkconfig.defaults` — that is where the 8 MB flash size and the NimBLE bond
+persistence live. `sdkconfig` and `sdkconfig.old` are gitignored because they
+carry the Wi-Fi passphrase in plaintext.
+
+## What is here
+
+| | |
+|---|---|
+| `main/main.c` | BLE host, GAP events, Wi-Fi lifecycle, NVS credentials |
+| `main/gatt_svr.c` | the GATT table and its write handlers |
+| `main/tcp_server.c` | the Wi-Fi data plane: one client, length-prefixed frames |
+| `main/display.c` | SSD1306 panel, font, wrapping, pagination |
+| `test/` | host-side pytest suite driving the real chip over BLE |
+
+## Two things that will bite you
+
+**Adding a characteristic means bumping `MONOCLE_GATT_VERSION` in
+`main/bleprph.h`.** A bonded central caches the attribute table forever, so a
+new characteristic is simply invisible until the user forgets the device —
+which looks exactly like a bug in whatever you just added. The version makes
+the firmware send a Service Changed indication instead.
+
+**One central at a time.** The firmware stops advertising while connected, so
+the app or nRF Connect holding the link makes the board invisible to the test
+suite. Disconnect there first.
+
+## Tests
 
 ```bash
-idf.py menuconfig
+cd test
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest -m "not hardware"      # codec only, no board
+.venv/bin/python -m pytest -m hardware            # against the chip
 ```
 
-In the `Example Configuration` menu:
-
-* Enter SSID and password of known Wi-Fi AP with connectivity to internet.
-* Enter desired ping IP Address. Default is set to `93.184.216.34` ( This is the IP address of https://example.com ).
-
-* Enter other related parameters like count of ping and maximum numbers of retry.
-
-## Testing
-
-To test this demo, any BLE scanner app and a WiFi access point with internet connectivity can be used.
-
-### Build and Flash
-
-Run `idf.py -p PORT flash monitor` to build, flash and monitor the project.
-
-(To exit the serial monitor, type ``Ctrl-]``.)
-
-See the [Getting Started Guide](https://idf.espressif.com/) for full steps to configure and use ESP-IDF to build projects.
-
-## Troubleshooting
-
-For any technical queries, please open an [issue](https://github.com/espressif/esp-idf/issues) on GitHub. We will get back to you soon.
+See [`test/README.md`](test/README.md) for the tiers, what is covered, and the
+checks that only a human looking at the panel can make.

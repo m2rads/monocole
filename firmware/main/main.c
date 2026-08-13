@@ -46,11 +46,11 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 
-#define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_EXAMPLE_ESP_MAXIMUM_RETRY
+#define MONOCLE_WIFI_MAX_RETRY     CONFIG_MONOCLE_WIFI_MAX_RETRY
 
-/* The SSID the example ships with. Treated as "unset" so an untouched
- * menuconfig doesn't send us chasing a network that doesn't exist. */
-#define EXAMPLE_PLACEHOLDER_SSID   "myssid"
+/* The Kconfig default. Treated as "unset" so an untouched menuconfig doesn't
+ * send us chasing a network that doesn't exist. */
+#define MONOCLE_PLACEHOLDER_SSID   "myssid"
 
 /* Where remembered credentials live, so a reboot doesn't need the app. */
 #define MONOCLE_NVS_KEY_SSID       "wifi_ssid"
@@ -144,10 +144,10 @@ static void event_handler(void* arg, esp_event_base_t event_base,
             return;
         }
 
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+        if (s_retry_num < MONOCLE_WIFI_MAX_RETRY) {
             s_retry_num++;
             ESP_LOGI(TAG, "connect failed (reason=%d); retry %d/%d",
-                     disc->reason, s_retry_num, EXAMPLE_ESP_MAXIMUM_RETRY);
+                     disc->reason, s_retry_num, MONOCLE_WIFI_MAX_RETRY);
             esp_wifi_connect();
         } else {
             uint8_t reason = disc->reason;
@@ -416,6 +416,53 @@ void wifi_prov_request_join(const char *ssid, const char *pass)
 
 void ble_store_config_init(void);
 
+/*
+ * Connection parameters the voice path needs, in the units the spec uses:
+ * intervals in 1.25 ms steps, the supervision timeout in 10 ms steps.
+ *
+ * macOS connects at 30 ms by default. ADPCM at 64 kbps is 8 KB/s, which is
+ * ~240 bytes per 30 ms — about one notification, with no room for a retry or a
+ * Wi-Fi burst stealing the airtime. Halving the interval doubles the budget.
+ *
+ * These are a request, not a setting: the central decides, and it may refuse
+ * or counter-offer, which is why the negotiated values are logged rather than
+ * assumed.
+ */
+#define MONOCLE_CONN_ITVL_MIN       12      /* 15 ms — Apple's floor */
+#define MONOCLE_CONN_ITVL_MAX       24      /* 30 ms — must be >= min + 15 ms */
+#define MONOCLE_CONN_LATENCY        0
+#define MONOCLE_CONN_TIMEOUT        400     /* 4 s — Apple's ceiling is 6 s */
+
+/**
+ * Asks for a shorter connection interval.
+ *
+ * Called once encryption is up rather than straight after connect. The link
+ * layer runs one control procedure at a time, and a request issued while the
+ * central is still doing its own setup collides: an earlier version fired this
+ * alongside a PHY request on connect and roughly half of both failed —
+ * connection updates with HCI 0x2A ("different transaction collision"), PHY
+ * updates with 0x23 — which also made the hardware test suite flaky.
+ *
+ * The ranges follow Apple's accessory rules, since the central here is macOS:
+ * a minimum of at least 15 ms, a maximum at least 15 ms above the minimum, and
+ * a supervision timeout under 6 s. A request outside those is simply refused.
+ */
+static void
+monocle_request_fast_interval(uint16_t conn_handle)
+{
+    struct ble_gap_upd_params params = {
+        .itvl_min = MONOCLE_CONN_ITVL_MIN,
+        .itvl_max = MONOCLE_CONN_ITVL_MAX,
+        .latency = MONOCLE_CONN_LATENCY,
+        .supervision_timeout = MONOCLE_CONN_TIMEOUT,
+    };
+    int rc = ble_gap_update_params(conn_handle, &params);
+
+    if (rc != 0) {
+        ESP_LOGW(TAG, "could not request faster connection params; rc=%d", rc);
+    }
+}
+
 /**
  * Logs information about a connection to the console.
  */
@@ -479,14 +526,15 @@ bleprph_advertise(void)
     struct ble_hs_adv_fields fields;
     int rc;
 
-    /**
-     *  Set the advertisement data included in our advertisements:
-     *     o Flags (indicates advertisement type and other general info).
-     *     o Advertising tx power.
-     *     o Device name.
-     *     o 16-bit service UUIDs (alert notifications).
+    /*
+     * The advertisement carries the flags and the monocle service UUID, and
+     * nothing else. A 128-bit UUID costs 18 of the 31 available bytes, so the
+     * name will not fit beside it — and the UUID has to be here rather than in
+     * the scan response, because that is what a central can filter on.
+     *
+     * The name moves to the scan response below, which an active scan asks for
+     * anyway, so it still shows up in the app's device list.
      */
-
     memset(&fields, 0, sizeof fields);
 
     /* Advertise two flags:
@@ -496,28 +544,30 @@ bleprph_advertise(void)
     fields.flags = BLE_HS_ADV_F_DISC_GEN |
                    BLE_HS_ADV_F_BREDR_UNSUP;
 
-    /* Indicate that the TX power level field should be included; have the
-     * stack fill this value automatically.  This is done by assigning the
-     * special value BLE_HS_ADV_TX_PWR_LVL_AUTO.
-     */
-    fields.tx_pwr_lvl_is_present = 1;
-    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
-
-    const char *name;
-    name = ble_svc_gap_device_name();
-    fields.name = (uint8_t *)name;
-    fields.name_len = strlen(name);
-    fields.name_is_complete = 1;
-
-    fields.uuids16 = (ble_uuid16_t[]) {
-        BLE_UUID16_INIT(GATT_SVR_SVC_ALERT_UUID)
-    };
-    fields.num_uuids16 = 1;
-    fields.uuids16_is_complete = 1;
+    fields.uuids128 = (ble_uuid128_t[]) { *gatt_svr_service_uuid() };
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
 
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "error setting advertisement data; rc=%d", rc);
+        return;
+    }
+
+    /* Scan response: the name, plus the tx power the stack fills in for us. */
+    memset(&fields, 0, sizeof fields);
+
+    const char *name = ble_svc_gap_device_name();
+    fields.name = (uint8_t *)name;
+    fields.name_len = strlen(name);
+    fields.name_is_complete = 1;
+
+    fields.tx_pwr_lvl_is_present = 1;
+    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+
+    rc = ble_gap_adv_rsp_set_fields(&fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "error setting scan response data; rc=%d", rc);
         return;
     }
 
@@ -609,6 +659,16 @@ bleprph_gap_event(struct ble_gap_event *event, void *arg)
         rc = ble_gap_conn_find(event->enc_change.conn_handle, &desc);
         assert(rc == 0);
         bleprph_print_conn_desc(&desc);
+        monocle_request_fast_interval(event->enc_change.conn_handle);
+        return 0;
+
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        /* 1 = 1M, 2 = 2M, 3 = coded. Worth reading: the central can decline,
+         * and the voice budget assumes 2M. */
+        ESP_LOGI(TAG, "phy update; status=%d tx_phy=%d rx_phy=%d",
+                 event->phy_updated.status,
+                 event->phy_updated.tx_phy,
+                 event->phy_updated.rx_phy);
         return 0;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -667,6 +727,18 @@ bleprph_on_sync(void)
 
     rc = ble_hs_util_ensure_addr(0);
     assert(rc == 0);
+
+    /* Prefer 2M for every connection from here on, rather than asking per
+     * connection: a PHY request issued at connect time competes with the
+     * central's own setup and with our interval request, and the link layer
+     * runs one procedure at a time. Setting the default means the controller
+     * simply starts there. 2M halves each packet's time on the air, which
+     * matters on a board where BLE and Wi-Fi share one antenna. */
+    rc = ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK,
+                                             BLE_GAP_LE_PHY_2M_MASK);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "could not set the default 2M PHY; rc=%d", rc);
+    }
 
     /* Figure out address to use while advertising (no privacy for now) */
     rc = ble_hs_id_infer_auto(0, &own_addr_type);
@@ -760,7 +832,7 @@ app_main(void)
     assert(rc == 0);
 
     /* Set the default device name. */
-    rc = ble_svc_gap_device_name_set("nimble-bleprph");
+    rc = ble_svc_gap_device_name_set("minicole-monocle");
     assert(rc == 0);
 #endif
 
@@ -775,15 +847,15 @@ app_main(void)
     if (wifi_creds_load(s_ssid, sizeof s_ssid, s_pass, sizeof s_pass)) {
         ESP_LOGI(TAG, "using stored credentials for SSID \"%s\"", s_ssid);
         wifi_prov_connect(s_ssid, s_pass);
-    } else if (strcmp(CONFIG_EXAMPLE_ESP_WIFI_SSID, EXAMPLE_PLACEHOLDER_SSID) != 0) {
+    } else if (strcmp(CONFIG_MONOCLE_FALLBACK_WIFI_SSID, MONOCLE_PLACEHOLDER_SSID) != 0) {
         /* Development convenience: credentials set in menuconfig are used when
          * nothing has been provisioned over BLE yet. A successful join saves
          * them to NVS, after which the stored copy wins and this is skipped.
          * Leave the SSID at its placeholder to disable this path. */
         ESP_LOGI(TAG, "using menuconfig credentials for SSID \"%s\"",
-                 CONFIG_EXAMPLE_ESP_WIFI_SSID);
-        wifi_prov_connect(CONFIG_EXAMPLE_ESP_WIFI_SSID,
-                          CONFIG_EXAMPLE_ESP_WIFI_PASSWORD);
+                 CONFIG_MONOCLE_FALLBACK_WIFI_SSID);
+        wifi_prov_connect(CONFIG_MONOCLE_FALLBACK_WIFI_SSID,
+                          CONFIG_MONOCLE_FALLBACK_WIFI_PASSWORD);
     } else {
         ESP_LOGI(TAG, "no stored or configured credentials; "
                       "write them to the wifi_creds characteristic");

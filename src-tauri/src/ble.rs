@@ -22,6 +22,7 @@ const SCAN_TTL: Duration = Duration::from_secs(30);
 
 // The monocle's GATT contract. These must match the BLE_UUID128_INIT values in
 // the firmware's gatt_svr.c — see docs/protocol.md.
+const SERVICE_UUID: Uuid = uuid!("83486508-636c-4260-9119-c0ccc2004219");
 const WIFI_CREDS_CHR_UUID: Uuid = uuid!("2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c");
 const WIFI_STATE_CHR_UUID: Uuid = uuid!("1ad1e743-dcae-422d-a7a8-68b4d695ac8b");
 const WIFI_CONTROL_CHR_UUID: Uuid = uuid!("e4782756-b76f-482c-9a0a-8c546a9134f1");
@@ -46,10 +47,12 @@ pub(crate) const DISPLAY_TEXT_MAX: usize = 252;
 // firmware's own boot and disconnect messages.
 const GREETING: &str = "minicole\nconnected";
 
-// The monocle is currently a XIAO ESP32-S3 Sense, but the board may change,
-// so connection management stays generic BLE: scan for any peripheral and
-// let the user pick. Once the firmware's GATT service stabilizes, add its
-// service UUID to the ScanFilter and to a "looks like a monocle" check.
+// Scans are filtered to devices advertising the monocle service, so the list
+// is monocles rather than every device in the room. The firmware puts this
+// UUID in the advertisement itself — not the scan response — because that is
+// what a central can filter on; the device name rides in the scan response
+// instead, since a 128-bit UUID and a name do not both fit in 31 bytes.
+//
 // TODO(auto-reconnect): persist the chosen device id in settings.json and
 // reconnect to it automatically on launch / signal loss.
 // TODO(monocle-protocol): after connect, subscribe to the voice and status
@@ -411,7 +414,9 @@ pub async fn ble_start_scan(app: AppHandle, state: State<'_, BleState>) -> Resul
     check_powered_on(&adapter).await?;
 
     adapter
-        .start_scan(ScanFilter::default())
+        .start_scan(ScanFilter {
+            services: vec![SERVICE_UUID],
+        })
         .await
         .map_err(|err| format!("failed to start scan: {err}"))?;
     state.scanning.store(true, Ordering::SeqCst);

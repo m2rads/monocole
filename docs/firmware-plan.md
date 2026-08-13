@@ -86,17 +86,33 @@ optionally a snapshot of what they're looking at goes along with the query.
 1. ~~**Advertise + connect**~~ — **done.** The stock `bleprph` example builds,
    flashes, advertises, and the app's Connection tab connects to it. Proves the
    pairing path end to end; no app-side changes were needed.
-2. **GATT skeleton** — scaffold `firmware/` from `bleprph`: advertise as
-   `minicole-monocle`, define the real service and characteristics from
-   protocol.md, enable bonding with keys in NVS. App side: freeze the UUIDs and
-   add a `ScanFilter`.
-3. **Voice path** — mic → I2S DMA → ADPCM → BLE notify → app writes a WAV to
-   disk. Confirm sustained 64 kbps holds without drops (absorbs the old
-   throughput test).
+2. ~~**GATT skeleton**~~ — **done.** `firmware/` holds the real service and its
+   characteristics, bonding keys persist in NVS, and the device advertises as
+   `minicole-monocle`. The advertisement carries the 128-bit service UUID and
+   the name rides in the scan response, because the two do not both fit in
+   31 bytes and only the advertisement can be filtered on — which is what the
+   app's `ScanFilter` now uses. The test harness finds the board the same way,
+   since macOS caches a bonded peripheral's *name* and would otherwise keep
+   reporting the old one.
+3. **Voice path** — mic → I2S DMA → ESP-SR front end → wake word → ADPCM → BLE
+   notify → app writes a WAV to disk. Confirm sustained 64 kbps holds without
+   drops (absorbs the old throughput test).
+
+   The trigger is **a stock WakeNet wake word from the start** ("Hi ESP" or
+   "Alexa"), not a button: speaking is the product, and a button on a
+   face-worn device is an interaction nobody would ship. This pulls ESP-SR and
+   a model partition into this milestone, and shapes the audio pipeline around
+   ESP-SR's front end — I2S feeds the AFE, and the detector and the encoder
+   both read what it produces.
+
+   Order within the milestone matters: bring capture up and confirm the
+   recording is audible **before** wiring the detector, so a silent pipeline
+   never has two possible causes. See "What starts a voice session" in
+   [protocol.md](protocol.md).
 4. ~~**Wi-Fi handoff**~~ — **done.** Creds write → join → report IP over BLE →
    app opens a TCP socket → echo + bulk transfer, with idle teardown and
-   `wifi_control` to power the plane back up. Throughput measurement pending on
-   hardware; see `ble-examples/bleprph_wifi_coex/test/`.
+   `wifi_control` to power the plane back up. Measured on hardware — see
+   Measured throughput in [protocol.md](protocol.md) and `firmware/test/`.
 5. **Display** — SSD1306 OLED over I2C, driven by the `display` characteristic.
    Ordered ahead of the photo path deliberately: it is the only remaining piece
    on the *output* side, it needs neither PSRAM nor the camera component, and
@@ -122,11 +138,15 @@ renderer. Its driver ships in ESP-IDF (`esp_lcd_panel_ssd1306`); fonts do not,
 so a small ASCII table lives in the firmware. What remains after the greeting
 works is listed under Future work in [protocol.md](protocol.md).
 
-## Hardware config still to enable
+## Hardware config
 
-Both known and both deferred (see firmware-learning-notes.md open threads):
+Both enabled, in `sdkconfig.defaults` — the only place that survives
+`idf.py set-target`.
 
-- **8 MB flash** — the XIAO S3 has 8 MB but builds default to 2 MB. Set before
-  building a real partition table; OTA and Wi-Fi will want the space.
-- **PSRAM** — not yet enabled. Turn on before BLE + Wi-Fi + audio + camera
-  buffers coexist.
+- **8 MB flash** — builds default to 2 MB and the bootloader warns about the
+  mismatch. Confirmed against the chip: `esptool flash-id` reports 8 MB, quad,
+  3.3 V.
+- **PSRAM** — 8 MB, and **octal**, not the quad default. The module reports
+  itself as "Embedded PSRAM 8MB (AP_3v3)"; the boot log confirms `octal_psram`
+  vendor 0x0d, 64 Mbit, and 8192 K added to the heap at 80 MHz. Enabled ahead
+  of the camera so the memory layout changes once rather than twice.

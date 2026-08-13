@@ -15,6 +15,20 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 # characteristic (wifi_creds, wifi_control) fails. See ble_hs_cfg in main.c.
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
 
+# The MTU we offer during exchange; the negotiated value is the lower of the
+# two ends. NimBLE defaults to 256, which is why the link settled there — macOS
+# offers considerably more. Voice needs the payload: ADPCM at 64 kbps is 8 KB/s,
+# and a bigger MTU is fewer notifications for the same audio.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+
+# PSRAM. esptool reports this module as "Embedded PSRAM 8MB (AP_3v3)", and 8 MB
+# embedded on an ESP32-S3 is the octal-interface part — the quad default would
+# fail to initialise it. The camera will need this; enabling it now means one
+# memory-layout change instead of two.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
 # WiFi config
 CONFIG_ESP_WIFI_IRAM_OPT=n
 

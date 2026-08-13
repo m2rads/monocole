@@ -420,6 +420,12 @@ gatt_svr_chr_access_display(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+const ble_uuid128_t *
+gatt_svr_service_uuid(void)
+{
+    return &gatt_svr_svc_monocle_uuid;
+}
+
 void
 gatt_svr_on_connect(uint16_t conn_handle)
 {

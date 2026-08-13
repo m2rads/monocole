@@ -79,12 +79,12 @@ connection/session management. Full plans live in `docs/`.
   and nothing outside `display.c` should assume it. **Still open**: geometry
   over `status`, and no way for the wearer to page back. See Future work in
   protocol.md.
-- **Firmware**: `firmware/` not started; the working firmware is the forked
-  `ble-examples/bleprph_wifi_coex/`, which still advertises as
-  `nimble-bleprph`. Milestones 1, 2 (partial), and 4 are done: pairing with
-  bonded keys in NVS, provisioning, join, IP reported over BLE, TCP data
-  plane, and idle teardown are all verified on hardware. Voice, camera, and
-  the display are not started. Decisions: C++ on ESP-IDF v6.0.2, NimBLE, and a
+- **Firmware**: lives in `firmware/`, forked from ESP-IDF's
+  `bleprph_wifi_coex` and rewritten since; advertises as `minicole-monocle`.
+  Milestones 1, 2, 4 and 5 are done and verified on hardware: bonded pairing
+  with keys in NVS, provisioning, join, IP over BLE, the TCP data plane with
+  idle teardown, and the OLED. Voice and camera are not started. Decisions:
+  C++ on ESP-IDF v6.0.2, NimBLE, and a
   two-plane transport — BLE always-on for control/status/tokens/voice (ADPCM
   ~64kbps), Wi-Fi on-demand for JPEG stills only (LLM consumes stills, not
   video). See docs/firmware-plan.md for rejected alternatives.

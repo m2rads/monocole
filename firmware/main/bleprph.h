@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include "nimble/ble.h"
+#include "host/ble_uuid.h"
 #include "modlog/modlog.h"
 #ifdef __cplusplus
 extern "C" {
@@ -53,7 +54,7 @@ struct ble_gatt_register_ctxt;
  *
  * Forgetting to bump it looks exactly like a bug in whatever you just added.
  */
-#define MONOCLE_GATT_VERSION                  2
+#define MONOCLE_GATT_VERSION                  3
 
 /* Values reported over the wifi_state characteristic. Keep in sync with
  * WifiState in src-tauri/src/ble.rs and docs/protocol.md. */
@@ -66,6 +67,10 @@ enum monocle_wifi_state {
 
 void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
 int gatt_svr_init(void);
+
+/* The monocle service's UUID, so advertising can carry it and the app can
+ * filter scans by it instead of listing every device in the room. */
+const ble_uuid128_t *gatt_svr_service_uuid(void);
 
 /* Connection bookkeeping, called from the GAP event handler in main.c. The
  * GATT layer needs the current connection to send notifications on. */

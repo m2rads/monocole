@@ -1,21 +1,33 @@
-menu "Example Configuration"
+menu "Monocle Configuration"
 
-    config EXAMPLE_ESP_WIFI_SSID
-        string "WiFi SSID"
+    config MONOCLE_FALLBACK_WIFI_SSID
+        string "Development fallback Wi-Fi SSID"
         default "myssid"
         help
-            SSID (network name) for the example to connect to.
+            Used only at boot, and only when NVS holds no credentials — the
+            normal path is the app writing them to the wifi_creds
+            characteristic over BLE. A successful join saves them to NVS,
+            after which the stored copy wins and this is ignored.
 
-    config EXAMPLE_ESP_WIFI_PASSWORD
-        string "WiFi Password"
+            Leave it at the "myssid" placeholder to disable the fallback and
+            always wait for the app.
+
+    config MONOCLE_FALLBACK_WIFI_PASSWORD
+        string "Development fallback Wi-Fi password"
         default "mypassword"
         help
-            WiFi password (WPA or WPA2) for the example to use.
+            Passphrase for the fallback SSID above.
 
-    config EXAMPLE_ESP_MAXIMUM_RETRY
-        int "WIFI Connect Maximum retry"
+            Note this is stored in plaintext in sdkconfig. That file is
+            gitignored, as is sdkconfig.old — a passphrase reached this
+            repository's history through the latter once already.
+
+    config MONOCLE_WIFI_MAX_RETRY
+        int "Wi-Fi join attempts before giving up"
         default 5
         help
-            Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
+            How many times to retry a join before reporting failure over the
+            wifi_state characteristic, so an absent or misconfigured network
+            fails visibly instead of retrying forever.
 
 endmenu

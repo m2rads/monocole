@@ -90,10 +90,10 @@ Exit the monitor with **Ctrl-]**.
 
 ## Notes
 
-- `hello_world` and the copies under `ble-examples/` are disposable setup
-  checks. The real firmware — the `minicole-monocle` peripheral — goes in
-  `firmware/`, scaffolded from the `bleprph` NimBLE example. See
-  `firmware-plan.md` milestone 2.
+- `hello_world` and any examples you copy out of ESP-IDF are disposable setup
+  checks. The real firmware — the `minicole-monocle` peripheral — lives in
+  `firmware/`, forked from the `bleprph_wifi_coex` NimBLE example and rewritten
+  since. See `firmware/README.md`.
 - Copied examples default to target `esp32`. On the XIAO you must run `idf.py
   set-target esp32s3` **before** the first build, or flashing fails with
   `This chip is ESP32-S3, not ESP32`. `set-target` also resets `sdkconfig` to
@@ -164,14 +164,22 @@ Exit the monitor with **Ctrl-]**.
 | port busy | old monitor still open | Ctrl-] in the other terminal |
 | no `/dev/cu.usbmodem*` at all | charge-only USB cable | swap the cable first |
 
-## Wi-Fi examples need credentials
+## Wi-Fi credentials
 
-Examples with Wi-Fi (e.g. `bleprph_wifi_coex`) ship placeholders —
-`myssid` / `mypassword`. Set real ones before flashing:
+The monocle normally gets its network from the app, written to the `wifi_creds`
+characteristic over BLE and remembered in NVS afterwards. You should not need
+to configure anything to use it.
+
+There is a development fallback for a freshly erased board, used only when NVS
+is empty:
 
 ```bash
-idf.py menuconfig     # → Example Configuration → WiFi SSID / WiFi Password
+idf.py menuconfig     # → Monocle Configuration → Development fallback Wi-Fi …
 ```
+
+Leave the SSID at `myssid` to disable it. Note the passphrase then sits in
+plaintext in `sdkconfig` — gitignored, along with `sdkconfig.old`, which is how
+one reached this repository's history before.
 
 The ESP32-S3 is **2.4 GHz only**. It cannot join a 5 GHz network, and it cannot
 log into a captive portal. Public and coworking Wi-Fi typically fails on both

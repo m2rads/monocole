@@ -192,6 +192,43 @@ missing. Adding a language means adding glyphs to `EXTRA_GLYPHS` in
 Note the size limit is in **bytes**, so accented text fits fewer characters per
 write. The app splits on character boundaries, never mid-sequence.
 
+### What starts a voice session
+
+**The device decides, and tells the app.** Whatever wakes the monocle —
+a button today, a wake word later — is internal to the firmware. What crosses
+the wire is only the *event*: a notification that a voice session has started,
+and another when it ends. Keeping the trigger out of the protocol is what makes
+it swappable without touching the app.
+
+The app's job on "started" is to open a new session, the same as if the user
+had begun typing.
+
+Decided: **a stock WakeNet wake word from the start** — "Hi ESP" or "Alexa";
+the choice does not matter yet. No button stage. Speaking to a monocle is the
+product; a button on a device worn on the face is not, and building the button
+first would mean designing around an interaction nobody will ever use.
+
+A custom word like "Jarvis" is a model Espressif trains commercially, so it is
+a later swap. The wake word itself stays out of the protocol either way.
+
+This brings work forward rather than adding it: ESP-SR as a managed component,
+and a partition table with room for its models — today's
+`partitions_singleapp_large.csv` has none. It also means the audio pipeline is
+shaped by ESP-SR's front end from the beginning: I2S feeds the AFE, and both
+the detector and the encoder read what the AFE produces, rather than the
+encoder reading raw I2S.
+
+Consequences accepted up front: the mic and a small neural net run
+continuously, which is tens of milliamps on a head-worn device and the opposite
+of the duty cycling the Wi-Fi plane was built around. An always-listening
+microphone on someone's face is also a product decision, not only a technical
+one.
+
+The risk of doing it first is that a silent pipeline has two possible causes —
+the detector or the capture path. Mitigation: bring capture up on its own and
+confirm recorded audio is audible **before** wiring the detector to it, so the
+two are never unproven at the same time.
+
 ### Voice framing
 
 `[seq: u16][adpcm payload]` — 16 kHz mono source, IMA ADPCM (4-bit/sample,
@@ -202,10 +239,38 @@ Exact frame size is tuned against the connection interval in milestone 3.
 
 ### Link parameters
 
-- MTU: negotiate 517 (macOS typically grants 512-byte payloads).
-- PHY: request 2M.
-- Connection interval: short (~15 ms) while streaming voice.
-- Budget: ~200 kbps sustained. Voice uses roughly a third of it.
+Measured against macOS, 2026-08-12, over 35 connections:
+
+| | Asked for | Granted |
+|---|---|---|
+| MTU | 512 | **512** |
+| PHY | 2M | **2M**, every connection |
+| Connection interval | 15–30 ms | **30 ms**, every connection |
+
+**MTU was 256 because of us, not macOS.** `CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`
+defaults to 256 in NimBLE and the negotiated value is the lower of the two
+ends. Raising it doubled the payload per notification to ~509 bytes.
+
+**30 ms appears to be the floor with macOS as central.** Apple's accessory
+rules require a minimum of at least 15 ms *and* a maximum at least 15 ms above
+it, so the narrowest legal request containing 15 ms is 15–30 ms — and macOS
+picks the top of the range. A request outside those rules is simply refused,
+which is what the first attempt at 15–20 ms hit.
+
+**Ask for one thing at a time.** The link layer runs a single control procedure
+at a time. Requesting the PHY change and the interval change together on
+connect made roughly half of each fail — connection updates with HCI 0x2A
+("different transaction collision"), PHY updates with 0x23 — and made the
+hardware test suite flaky, with errors landing on different tests each run. The
+fix: set the preferred PHY once at init via
+`ble_gap_set_prefered_default_le_phy` so no per-connection procedure runs, and
+request the interval after encryption completes rather than at connect, so it
+does not compete with the central's own setup.
+
+Budget: ~200 kbps sustained. Voice uses roughly a third. At 30 ms, ADPCM needs
+~240 bytes per interval, which is under half of one notification — so the
+interval is unlikely to be the constraint. Confirmed by measurement in
+milestone 3.
 
 ### Security
 

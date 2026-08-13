@@ -12,9 +12,9 @@ import os
 import pytest
 import pytest_asyncio
 
-from protocol import WIFI_STATE_UUID, WifiState, decode_state
+from protocol import SERVICE_UUID, WIFI_STATE_UUID, WifiState, decode_state
 
-DEFAULT_DEVICE_NAME = "nimble-bleprph"
+DEFAULT_DEVICE_NAME = "minicole-monocle"
 SCAN_TIMEOUT_S = 10.0
 
 
@@ -22,7 +22,9 @@ def pytest_addoption(parser):
     parser.addoption(
         "--device-name",
         default=os.environ.get("MONOCLE_NAME", DEFAULT_DEVICE_NAME),
-        help="BLE advertised name to look for.",
+        help="The name the firmware advertises. Informational only — the "
+        "device is found by its service UUID, which macOS does not cache "
+        "the way it caches names.",
     )
     parser.addoption(
         "--ssid",
@@ -58,22 +60,34 @@ def credentials(request) -> tuple[str, str]:
 
 @pytest_asyncio.fixture(loop_scope="session", scope="session")
 async def device(request):
-    """Finds the peripheral once per session."""
+    """Finds the peripheral once per session, by the service it advertises.
+
+    Matching on the service UUID rather than the name is deliberate: macOS
+    caches a bonded peripheral's name and keeps reporting the old one long
+    after the firmware changed it, so a rename would silently stop the whole
+    hardware suite from finding the board. The service UUID comes from the
+    advertisement itself and is always current.
+    """
     from bleak import BleakScanner
 
-    name = request.config.getoption("--device-name")
-    found = await BleakScanner.find_device_by_name(name, timeout=SCAN_TIMEOUT_S)
+    def is_monocle(_device, adv) -> bool:
+        return SERVICE_UUID in [uuid.lower() for uuid in adv.service_uuids]
+
+    found = await BleakScanner.find_device_by_filter(
+        is_monocle, timeout=SCAN_TIMEOUT_S
+    )
     if found is None:
         pytest.skip(
-            f"no BLE device named {name!r} within {SCAN_TIMEOUT_S:.0f}s.\n"
+            f"no device advertising {SERVICE_UUID} within "
+            f"{SCAN_TIMEOUT_S:.0f}s.\n"
             "  The usual cause is that something else is already connected: "
-            "bleprph accepts one\n"
-            "  central and stops advertising, so nRF Connect or the minicole "
-            "app holding the link\n"
-            "  makes the chip invisible here. Disconnect it there first.\n"
-            "  Otherwise: check the board is powered, flashed, and that the "
-            "name matches\n"
-            "  (--device-name / MONOCLE_NAME)."
+            "the firmware accepts\n"
+            "  one central and stops advertising, so nRF Connect or the "
+            "minicole app holding the\n"
+            "  link makes the chip invisible here. Disconnect it there first.\n"
+            "  Otherwise: check the board is powered and flashed, and run "
+            "scan.py to see what\n"
+            "  is on the air."
         )
     return found
 
