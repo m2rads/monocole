@@ -131,9 +131,21 @@ print_base64(const uint8_t *data, size_t len)
         if (col >= 76) {
             line[col] = '\0';
             printf("%s\n", line);
-            /* The console is a 115200-baud UART with a finite buffer; a tight
-             * loop of 100 KB outruns it and the tail arrives as garbage. */
-            vTaskDelay(pdMS_TO_TICKS(2));
+            /*
+             * Yield a whole tick per line, not a token amount.
+             *
+             * 76 characters at 115200 baud is ~6.6 ms on the wire, so writing
+             * faster than that fills the driver's TX buffer and printf blocks
+             * inside uart_tx_char. Blocking there without yielding starves the
+             * idle task and trips the task watchdog — which prints a backtrace
+             * into the middle of this very stream, corrupting the dump it is
+             * complaining about.
+             *
+             * pdMS_TO_TICKS(2) was the original bug: at a 100 Hz tick it
+             * truncates to 0 ticks, so it yielded nothing at all. One tick is
+             * the smallest delay that actually lets another task run.
+             */
+            vTaskDelay(1);
             col = 0;
         }
     }
@@ -181,12 +193,21 @@ mic_dump_to_console(float seconds)
     }
     ESP_LOGI(TAG, "captured %u samples: min=%d max=%d rms=%d",
              (unsigned)got, (int)min, (int)max,
-             got ? (int)sqrt((double)(sum_squares / (int64_t)got)) : 0);
+             got ? (int)sqrt((double)sum_squares / (double)got) : 0);
+
+    /* Silence every other task for the duration. The Wi-Fi retry logs in
+     * particular land in the middle of the stream otherwise, and a log line
+     * spliced into base64 breaks the decode rather than being ignored. The
+     * host filters defensively too, but a clean stream is worth more than a
+     * clever parser. */
+    esp_log_level_set("*", ESP_LOG_NONE);
 
     printf("---BEGIN MONOCLE PCM %u %u---\n",
            (unsigned)MIC_SAMPLE_RATE_HZ, (unsigned)got);
     print_base64((const uint8_t *)pcm, got * sizeof(int16_t));
     printf("---END MONOCLE PCM---\n");
+
+    esp_log_level_set("*", ESP_LOG_INFO);
 
     heap_caps_free(pcm);
 }

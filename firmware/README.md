@@ -53,6 +53,20 @@ the firmware send a Service Changed indication instead.
 the app or nRF Connect holding the link makes the board invisible to the test
 suite. Disconnect there first.
 
+**A silent board is usually in download mode, not wedged.** Any host tool that
+drives DTR/RTS can pull GPIO0 low as reset releases, which boots the ROM
+loader instead of the app. It then prints nothing and answers nothing, which
+reads exactly like dead hardware. Check the last reset line before believing
+that:
+
+    rst:0x15 (USB_UART_CHIP_RESET),boot:0x0 (DOWNLOAD(USB/UART0))
+    waiting for download
+
+`boot:0x0 DOWNLOAD` means it is waiting to be flashed — tap RST and it comes
+back. The genuine wedge, where even `esptool` cannot connect, needs BOOT held,
+RESET tapped, BOOT released. Scripts here therefore do not touch the control
+lines unless asked; see `test/capture_mic.py --reset`.
+
 ## Tests
 
 ```bash
