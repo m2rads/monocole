@@ -32,6 +32,12 @@ connection/session management. Full plans live in `docs/`.
   Bumping the version makes the firmware send Service Changed on the next
   connect. Symptom to recognise: `ble: no display characteristic on this
   device — discovered [...]` listing the *previous* build's UUIDs.
+  The Service Changed handle is resolved in `gatt_svr_on_sync()`, **not** in
+  `gatt_svr_init()` — handles do not exist until `ble_gatts_start()` runs on
+  the way to the sync callback, and looking it up in init silently disabled the
+  whole mechanism until 2026-08-13. Boot log must say `service changed
+  characteristic at handle N`; the warning form means bumping the version does
+  nothing.
 - The theme provider globally disables CSS transitions during a light/dark
   switch — the animated toggle icons opt out with `!important` utilities.
 

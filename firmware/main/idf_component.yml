@@ -1,0 +1,17 @@
+## Managed dependencies. `dependencies.lock` is gitignored, so this file is the
+## only place a version is pinned — leaving a bare "*" here would let a fresh
+## clone resolve something newer and untested.
+dependencies:
+  idf:
+    version: '>=5.0'
+
+  ## Speech: the AFE front end and the WakeNet wake-word detector.
+  ##
+  ## Pinned to 2.5.x deliberately. esp-sr declares only `idf: ">=5.0"` and says
+  ## nothing about ESP-IDF v6, which is a breaking major — 2.5.0 is the version
+  ## actually verified against v6.0.2 on hardware (see docs/voice-plan.md,
+  ## phase 1a). Widening this is a decision to re-run that check, not a
+  ## formality.
+  ##
+  ## Which wake words get compiled in is chosen in sdkconfig.defaults, not here.
+  espressif/esp-sr: '~2.5.0'

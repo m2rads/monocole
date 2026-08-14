@@ -33,8 +33,11 @@ enum display_op {
     DISPLAY_OP_APPEND = 2,   /* add to what is there; how tokens will stream */
 };
 
-/* Longest text one write can carry. An ATT write request holds MTU-3 bytes of
- * value (253 at the 256 macOS negotiates), and the op byte is one of them. */
+/* Longest text one write can carry — this buffer, not the link. An ATT write
+ * holds MTU-3 bytes of value, which at the negotiated MTU of 512 is 509. This
+ * limit dates from NimBLE's old default MTU of 256 and stayed put when the MTU
+ * was raised, so it leaves headroom. Mirrored by DISPLAY_TEXT_MAX in
+ * src-tauri/src/ble.rs. */
 #define DISPLAY_TEXT_MAX    252
 
 /* Brings up I2C and the panel, and starts the render task. Call once, at

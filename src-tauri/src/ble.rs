@@ -37,8 +37,12 @@ const PASS_MAX_LEN: usize = 63;
 pub(crate) const DISPLAY_OP_SET: u8 = 1;
 pub(crate) const DISPLAY_OP_APPEND: u8 = 2;
 
-// An ATT write request carries MTU-3 bytes of value — 253 at the 256 macOS
-// negotiates — and the op byte is one of them, so 252 bytes of text fit.
+// The firmware's display buffer, which is what bounds a write — not the link.
+// An ATT write carries MTU-3 bytes of value, so the negotiated MTU of 512
+// leaves room for 509; this limit dates from the MTU of 256 NimBLE defaulted
+// to before it was raised, and stayed put, so there is headroom here rather
+// than a constraint. Must match DISPLAY_TEXT_MAX in the firmware's display.h.
+//
 // Longer text is the caller's job to split: truncating here would cut UTF-8
 // mid-character and silently lose what the wearer was meant to read.
 pub(crate) const DISPLAY_TEXT_MAX: usize = 252;
@@ -272,9 +276,10 @@ async fn connected_peripheral(app: &AppHandle, state: &BleState) -> Result<Perip
 
 /// Subscribes to wifi_state and forwards notifications to the frontend.
 ///
-/// Devices without the characteristic — the stock `bleprph` example, say —
-/// connect normally and simply never report; that keeps `ble_connect` usable
-/// against firmware that predates this service.
+/// A device without the characteristic connects normally and simply never
+/// reports, which keeps `ble_connect` usable against firmware that predates
+/// this service. That is now only older minicole builds: since scans filter on
+/// the service UUID, anything not advertising it never reaches this point.
 async fn watch_wifi_state(app: &AppHandle, peripheral: &Peripheral) {
     let Some(characteristic) = find_characteristic(peripheral, WIFI_STATE_CHR_UUID) else {
         return;

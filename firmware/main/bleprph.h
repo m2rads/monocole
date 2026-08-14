@@ -68,6 +68,12 @@ enum monocle_wifi_state {
 void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
 int gatt_svr_init(void);
 
+/* Called once the host has synced, which is the earliest point at which the
+ * GATT table has real handles. Resolves the Service Changed characteristic —
+ * doing it in gatt_svr_init() is too early and silently disables the whole
+ * MONOCLE_GATT_VERSION mechanism. */
+void gatt_svr_on_sync(void);
+
 /* The monocle service's UUID, so advertising can carry it and the app can
  * filter scans by it instead of listing every device in the room. */
 const ble_uuid128_t *gatt_svr_service_uuid(void);

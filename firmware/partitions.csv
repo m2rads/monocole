@@ -1,0 +1,25 @@
+# Partition table for the monocle, on the XIAO ESP32-S3's 8 MB flash.
+#
+# Replaces CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE, which has no room for the
+# speech models: esp-sr packs the selected WakeNet models into srmodels.bin and
+# mounts them as SPIFFS from a partition whose label must be exactly "model".
+# Without that entry the build fails with "Failed to find model in partition
+# table file".
+#
+# nvs and phy_init keep the offsets and sizes the single-app table gave them.
+# That is deliberate: NVS holds the NimBLE bonding keys and the remembered
+# Wi-Fi credentials, so leaving it where it is means flashing this new layout
+# does not re-pair every bonded Mac or forget the network. Moving nvs would.
+#
+# factory grows from 1500K to 3M. The app was 1.03 MB before esp-sr, and
+# WakeNet's code lands in the app rather than the model partition. 3M is sized
+# for the camera and whatever milestone 6 adds, not just for today.
+#
+# Still 4.4 MB unallocated after this. OTA would want two app slots and an
+# otadata partition, which is a different table again — see firmware-plan.md.
+#
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   24K
+phy_init,   data, phy,     0xf000,   4K
+factory,    app,  factory, 0x10000,  3M
+model,      data, spiffs,  ,         512K

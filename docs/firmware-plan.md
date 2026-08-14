@@ -73,7 +73,10 @@ optionally a snapshot of what they're looking at goes along with the query.
 
 ## Throughput essentials
 
-- Negotiate MTU 517, request 2M PHY, short connection interval (~15 ms).
+- MTU 512, 2M PHY, and a 30 ms connection interval — all measured against
+  macOS rather than assumed, and 30 ms is the floor there. Ask for the PHY and
+  the interval separately, or they collide. See Link parameters in
+  [protocol.md](protocol.md).
 - Stream notifications from a dedicated FreeRTOS task fed by ring buffers off
   the I2S/camera DMA — never from callbacks.
 - Design BLE against a conservative ~200 kbps sustained budget. Voice uses

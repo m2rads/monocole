@@ -38,13 +38,15 @@ Run the scanner:
 .venv/bin/python scan.py
 ```
 
-**The usual cause is that something else is already connected.** `bleprph`
+**The usual cause is that something else is already connected.** The firmware
 accepts one central and stops advertising while connected, so nRF Connect or
 the minicole app holding the link makes the chip invisible to these tests.
 Disconnect there first.
 
-Otherwise check the board is powered and flashed, and that the advertised name
-matches (`--device-name`, default `nimble-bleprph`).
+Otherwise check the board is powered and flashed. The suite finds the board by
+the service UUID it advertises, not by name — macOS caches a bonded
+peripheral's name and keeps reporting a stale one, which would silently strand
+the whole suite after a rename. `--device-name` is informational only.
 
 ## What is covered
 

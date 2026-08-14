@@ -612,18 +612,36 @@ gatt_svr_init(void)
         return rc;
     }
 
+    return 0;
+}
+
+void
+gatt_svr_on_sync(void)
+{
+    int rc;
+
     /* Cache the Service Changed handle so the subscribe callback can spot it
-     * without a lookup per event. */
+     * without a lookup per event.
+     *
+     * This has to happen here rather than in gatt_svr_init(). Handles do not
+     * exist until ble_gatts_start() registers the table, and the host calls
+     * that on its way to the sync callback — long after app_main has run init.
+     * Looking it up too early always failed, silently leaving
+     * s_service_changed_handle at 0, which meant announce_gatt_change() never
+     * ran and bumping MONOCLE_GATT_VERSION did nothing at all. */
     rc = ble_gatts_find_chr(BLE_UUID16_DECLARE(BLE_GATT_SVC_UUID16),
                             BLE_UUID16_DECLARE(BLE_SVC_GATT_CHR_SERVICE_CHANGED_UUID16),
                             NULL, &s_service_changed_handle);
     if (rc != 0) {
-        /* Not fatal, but every future characteristic will then be invisible to
+        /* Not fatal, but every future characteristic is then invisible to
          * already-bonded centrals until they forget the device. */
         ESP_LOGW(TAG, "no service changed characteristic; peers will not be "
                       "told when the GATT table changes");
         s_service_changed_handle = 0;
+        return;
     }
 
-    return 0;
+    ESP_LOGI(TAG, "service changed characteristic at handle %u; bonded peers "
+                  "will be told about GATT table changes",
+             s_service_changed_handle);
 }

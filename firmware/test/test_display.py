@@ -49,7 +49,7 @@ class TestEncode:
 
     def test_maximum_text_fits_one_att_write(self):
         payload = encode(OP_SET, "x" * TEXT_MAX)
-        assert len(payload) == 253, "an ATT write at MTU 256 carries 253 bytes"
+        assert len(payload) == 253, "the agreed buffer size, op byte included"
 
     def test_text_beyond_the_maximum_is_refused(self):
         # The app splits rather than truncating: a cut inside a UTF-8
@@ -98,7 +98,8 @@ class TestWrites:
 
     async def test_full_size_write_lands_in_one_transaction(self, client):
         """253 bytes must not need a long write, which the firmware does not
-        reassemble."""
+        reassemble. Comfortable at the negotiated MTU of 512, which carries
+        509 per write."""
         await client.write_gatt_char(
             DISPLAY_UUID, encode(OP_SET, "x" * TEXT_MAX), response=True
         )

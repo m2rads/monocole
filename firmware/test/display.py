@@ -19,8 +19,10 @@ OP_APPEND = 2
 
 OP_NAMES = {OP_CLEAR: "clear", OP_SET: "set", OP_APPEND: "append"}
 
-# An ATT write request carries MTU-3 bytes of value; at the 256 macOS
-# negotiates that is 253, and the op byte is one of them.
+# The size both sides agree on. This is the firmware's buffer, not what the
+# link can carry: an ATT write holds MTU-3 bytes of value, so at the negotiated
+# MTU of 512 that is 509. The limit stayed at the old MTU-256 figure when the
+# MTU was raised, which leaves headroom rather than a bug.
 ATT_VALUE_MAX = 253
 TEXT_MAX = ATT_VALUE_MAX - 1
 

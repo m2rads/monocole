@@ -40,6 +40,14 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+/* Speech. TODO(voice-spike): these come with monocle_voice_spike() and stay
+ * once main/mic.c replaces it. */
+#include "esp_heap_caps.h"
+#include "model_path.h"
+#include "esp_afe_config.h"
+#include "esp_afe_sr_iface.h"
+#include "esp_afe_sr_models.h"
+
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "lwip/inet.h"
@@ -417,6 +425,72 @@ void wifi_prov_request_join(const char *ssid, const char *pass)
 void ble_store_config_init(void);
 
 /*
+ * TODO(voice-spike): delete this once main/mic.c exists.
+ *
+ * Milestone 3's gate: prove esp-sr links, loads its models from the new
+ * partition, and allocates its front end alongside BLE, Wi-Fi and the panel —
+ * and say what that costs in memory. It answers those questions without a
+ * microphone, because the pipeline that feeds it does not exist yet.
+ *
+ * Building the AFE and immediately destroying it is the whole point: the
+ * interesting number is the difference across those two lines.
+ */
+static void
+monocle_voice_spike(void)
+{
+    size_t before_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t before_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
+    srmodel_list_t *models = esp_srmodel_init("model");
+    if (models == NULL || models->num == 0) {
+        ESP_LOGE(TAG, "voice spike: no models in the 'model' partition");
+        return;
+    }
+    for (int i = 0; i < models->num; i++) {
+        ESP_LOGI(TAG, "voice spike: model %d/%d = %s",
+                 i + 1, models->num, models->model_name[i]);
+    }
+
+    /* "M" is one microphone and no reference channel: the XIAO has a single
+     * PDM mic, and echo cancellation would need a copy of what we are playing,
+     * which on a device with no speaker is nothing. */
+    afe_config_t *config = afe_config_init("M", models, AFE_TYPE_SR,
+                                           AFE_MODE_LOW_COST);
+    if (config == NULL) {
+        ESP_LOGE(TAG, "voice spike: afe_config_init failed");
+        return;
+    }
+
+    const esp_afe_sr_iface_t *afe = esp_afe_handle_from_config(config);
+    esp_afe_sr_data_t *afe_data = afe->create_from_config(config);
+    if (afe_data == NULL) {
+        ESP_LOGE(TAG, "voice spike: could not create the AFE");
+        afe_config_free(config);
+        return;
+    }
+
+    int chunk = afe->get_feed_chunksize(afe_data);
+    ESP_LOGI(TAG, "voice spike: feed chunk %d samples (%d ms at %d Hz), "
+                  "%d channel(s)",
+             chunk, (chunk * 1000) / afe->get_samp_rate(afe_data),
+             afe->get_samp_rate(afe_data), afe->get_feed_channel_num(afe_data));
+
+    size_t after_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t after_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
+    ESP_LOGI(TAG, "voice spike: AFE costs %d KB internal, %d KB PSRAM",
+             (int)((before_internal - after_internal) / 1024),
+             (int)((before_spiram - after_spiram) / 1024));
+    ESP_LOGI(TAG, "voice spike: free with AFE up — %d KB internal, %d KB PSRAM",
+             (int)(after_internal / 1024), (int)(after_spiram / 1024));
+
+    afe->destroy(afe_data);
+    afe_config_free(config);
+    ESP_LOGI(TAG, "voice spike: AFE destroyed; %d KB internal free again",
+             (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+}
+
+/*
  * Connection parameters the voice path needs, in the units the spec uses:
  * intervals in 1.25 ms steps, the supervision timeout in 10 ms steps.
  *
@@ -728,6 +802,9 @@ bleprph_on_sync(void)
     rc = ble_hs_util_ensure_addr(0);
     assert(rc == 0);
 
+    /* The GATT table has handles by now, which it did not during init. */
+    gatt_svr_on_sync();
+
     /* Prefer 2M for every connection from here on, rather than asking per
      * connection: a PHY request issued at connect time competes with the
      * central's own setup and with our interval request, and the link layer
@@ -860,4 +937,9 @@ app_main(void)
         ESP_LOGI(TAG, "no stored or configured credentials; "
                       "write them to the wifi_creds characteristic");
     }
+
+    /* Last, so a failure here cannot stop the rest of the device coming up —
+     * the point of the spike is to measure what is left after everything else
+     * has taken its share. */
+    monocle_voice_spike();
 }
