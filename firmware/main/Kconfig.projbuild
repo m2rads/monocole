@@ -30,4 +30,20 @@ menu "Monocle Configuration"
             wifi_state characteristic, so an absent or misconfigured network
             fails visibly instead of retrying forever.
 
+    config MONOCLE_MIC_DUMP_AT_BOOT
+        bool "Dump a few seconds of microphone audio at boot"
+        default n
+        help
+            Development aid for milestone 3. Records from the mic shortly
+            after boot and prints the PCM to the console as base64, which
+            firmware/test/capture_mic.py turns into a WAV.
+
+            The point is to prove the capture path produces intelligible
+            audio before a wake word detector is wired to it — otherwise a
+            silent pipeline has two possible causes and debugging it means
+            guessing which.
+
+            Off by default: it delays boot and prints ~130 KB to the console
+            every time.
+
 endmenu

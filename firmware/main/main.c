@@ -27,6 +27,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "bleprph.h"
 #include "display.h"
+#include "mic.h"
 
 /* WIFI */
 #include <stdlib.h>
@@ -942,4 +943,14 @@ app_main(void)
      * the point of the spike is to measure what is left after everything else
      * has taken its share. */
     monocle_voice_spike();
+
+    if (mic_init() != ESP_OK) {
+        ESP_LOGW(TAG, "no microphone; voice will not work");
+    }
+
+#if CONFIG_MONOCLE_MIC_DUMP_AT_BOOT
+    /* TODO(voice-spike): milestone 3's gate. See mic.h. */
+    vTaskDelay(pdMS_TO_TICKS(1500));   /* let the boot chatter clear first */
+    mic_dump_to_console(3.0f);
+#endif
 }
