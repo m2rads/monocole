@@ -27,6 +27,13 @@ const WIFI_CREDS_CHR_UUID: Uuid = uuid!("2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c");
 const WIFI_STATE_CHR_UUID: Uuid = uuid!("1ad1e743-dcae-422d-a7a8-68b4d695ac8b");
 const WIFI_CONTROL_CHR_UUID: Uuid = uuid!("e4782756-b76f-482c-9a0a-8c546a9134f1");
 const DISPLAY_CHR_UUID: Uuid = uuid!("e474939e-3010-4284-b280-4f365b6fe723");
+// Frozen ahead of the firmware that fills them, so these three implementations
+// and the test suite cannot each invent their own. Nothing subscribes yet —
+// see TODO(monocle-protocol) below.
+#[expect(dead_code, reason = "subscribed in the voice milestone")]
+const VOICE_CHR_UUID: Uuid = uuid!("adea8e3b-23be-4c83-873a-cccf43c555af");
+#[expect(dead_code, reason = "subscribed in the voice milestone")]
+const STATUS_CHR_UUID: Uuid = uuid!("d4f52189-0f32-4b6b-b880-00cc0dd7dd57");
 
 // Mirrors the 802.11 limits the firmware enforces. Checked here too so a bad
 // value is reported in the UI rather than as an opaque ATT error.

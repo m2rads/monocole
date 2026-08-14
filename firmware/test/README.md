@@ -72,9 +72,22 @@ the whole suite after a rename. `--device-name` is informational only.
   characteristic also proves the Service Changed mechanism works: a bonded
   central with a stale cache would not see it at all.
 
-`protocol.py` and `display.py` are independent implementations of the wire
-formats. They are deliberately not shared with the firmware or the Rust app, so
-that a drift on either side fails a test instead of being mirrored into it.
+- **Voice and status** — both characteristics are present and notify-only, and
+  status reports the panel geometry as soon as anything subscribes. There is no
+  mic pipeline yet, so the voice test asserts that *nothing* arrives: a device
+  streaming junk from an uninitialised buffer fails there. It is written so it
+  keeps working once frames do arrive.
+- **The ADPCM codec** — round-trip SNR, and the property the 5-byte frame
+  header exists for: a frame decodes identically alone and in sequence, so a
+  dropped notification costs only its own 32 ms. One test specifically catches
+  an encoder that resets its state per frame, which is decodable but buzzes at
+  the frame rate.
+
+`protocol.py`, `display.py` and `adpcm.py` are independent implementations of
+the wire formats. They are deliberately not shared with the firmware or the
+Rust app, so that a drift on either side fails a test instead of being mirrored
+into it. That matters most for the codec, where a subtle disagreement produces
+audio that is recognisable but wrong.
 
 ## Not covered here
 

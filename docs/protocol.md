@@ -260,13 +260,24 @@ at a 30 ms connection interval, one frame per interval keeps up with real time
 with room to spare for a retry or for Wi-Fi stealing airtime. Both figures are
 measured — see Link parameters.
 
-**Every frame restates the decoder state it starts from, and the encoder
-resets to match.** IMA ADPCM normally carries its predictor and step index from
-one sample to the next, forever, which means a single lost notification does
-not cost you 32 ms of audio — it turns everything after it into noise. Five
-bytes per frame buys that back. The app tolerates gaps rather than asking for
+**Every frame's header snapshots the decoder state it starts from. The encoder
+does not reset — it runs continuously and simply records where each frame
+began.** IMA ADPCM normally carries its predictor and step index from one
+sample to the next, forever, which means a single lost notification does not
+cost you 32 ms of audio: it turns everything after it into noise. Five bytes
+per frame buys that back. The app tolerates gaps rather than asking for
 retransmission, since stale audio is worthless, so frames have to be
 individually decodable for that tolerance to mean anything.
+
+**The distinction between snapshotting and resetting is not pedantic.**
+Resetting the encoder per frame is also decodable, and was what this document
+specified first. But the predictor then starts from zero 31 times a second
+while the step table starts at 7, so the predictor has to climb back to the
+signal level at the top of every frame and the first dozen-odd samples of each
+are wrong. That is an audible buzz at the frame rate, not a rounding error.
+Snapshotting costs the same five bytes and has no such artefact.
+`test_adpcm.py::test_every_frame_after_the_first_is_clean` is the regression
+test; it fails if a future encoder resets.
 
 `seq` increments per frame within one utterance and restarts at zero on the
 next. A gap tells the app how much audio is missing; it inserts that much

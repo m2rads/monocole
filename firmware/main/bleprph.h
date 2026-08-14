@@ -54,7 +54,25 @@ struct ble_gatt_register_ctxt;
  *
  * Forgetting to bump it looks exactly like a bug in whatever you just added.
  */
-#define MONOCLE_GATT_VERSION                  3
+#define MONOCLE_GATT_VERSION                  4
+
+/* Events reported over the status characteristic. Keep in sync with
+ * StatusEvent in src-tauri/src/ble.rs and docs/protocol.md.
+ *
+ * The trigger that starts a voice session stays off the wire deliberately —
+ * only the event crosses, so the wake word can change without the app caring.
+ */
+enum monocle_status_event {
+    MONOCLE_STATUS_VOICE_STARTED   = 1,  /* no extra */
+    MONOCLE_STATUS_VOICE_ENDED     = 2,  /* + 1 byte: monocle_voice_end_reason */
+    MONOCLE_STATUS_PANEL_GEOMETRY  = 3,  /* + 2 bytes: cols, rows */
+};
+
+enum monocle_voice_end_reason {
+    MONOCLE_VOICE_END_VAD    = 0,  /* the speaker stopped */
+    MONOCLE_VOICE_END_CAPPED = 1,  /* hit the maximum utterance length */
+    MONOCLE_VOICE_END_ERROR  = 2,  /* capture failed mid-utterance */
+};
 
 /* Values reported over the wifi_state characteristic. Keep in sync with
  * WifiState in src-tauri/src/ble.rs and docs/protocol.md. */
@@ -82,6 +100,14 @@ const ble_uuid128_t *gatt_svr_service_uuid(void);
  * GATT layer needs the current connection to send notifications on. */
 void gatt_svr_on_connect(uint16_t conn_handle);
 void gatt_svr_on_disconnect(void);
+/* Sends one status event. Silently does nothing when nobody is subscribed,
+ * which is the normal case for most of a session. */
+void gatt_svr_notify_status(uint8_t event, const void *extra, uint8_t extra_len);
+
+/* Whether anyone is listening for voice frames. The capture path checks this
+ * before encoding, since ADPCM for an empty room is wasted CPU. */
+bool gatt_svr_voice_is_subscribed(void);
+
 void gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
                            int cur_notify, int cur_indicate);
 

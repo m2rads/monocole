@@ -15,6 +15,18 @@ from dataclasses import dataclass
 SERVICE_UUID = "83486508-636c-4260-9119-c0ccc2004219"
 WIFI_CREDS_UUID = "2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c"
 WIFI_STATE_UUID = "1ad1e743-dcae-422d-a7a8-68b4d695ac8b"
+VOICE_UUID = "adea8e3b-23be-4c83-873a-cccf43c555af"
+STATUS_UUID = "d4f52189-0f32-4b6b-b880-00cc0dd7dd57"
+
+# status events.
+STATUS_VOICE_STARTED = 1
+STATUS_VOICE_ENDED = 2
+STATUS_PANEL_GEOMETRY = 3
+
+# voice_ended reasons.
+VOICE_END_VAD = 0
+VOICE_END_CAPPED = 1
+VOICE_END_ERROR = 2
 
 # 802.11 limits the firmware enforces.
 SSID_MAX_LEN = 32

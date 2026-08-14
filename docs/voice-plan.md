@@ -55,10 +55,17 @@ forever. The app never guesses from a gap in frames.
 
 **ADPCM frames are self-contained.** IMA ADPCM carries a predictor and a step
 index from sample to sample, so a single dropped notification corrupts
-everything after it. Each frame therefore restates its own starting state and
-the encoder resets per frame. The cost is 5 bytes in 261; the alternative is an
-utterance that turns to noise halfway through because one packet was lost, on a
-link where the app already tolerates gaps rather than asking for retransmission.
+everything after it. Each frame therefore restates its own starting state, in a
+5-byte header. The alternative is an utterance that turns to noise halfway
+through because one packet was lost, on a link where the app already tolerates
+gaps rather than asking for retransmission.
+
+**The encoder keeps running across frames rather than resetting** — the header
+records where each frame began, it does not force a fresh start. An earlier
+draft said "resets per frame", which is equally decodable and sounds worse: the
+predictor climbs from zero at the top of all 31 frames a second, which is an
+audible buzz. Caught by a codec test rather than by ear, which is the argument
+for having written the codec tests before the firmware.
 
 **STT is `whisper-server`, built from source.** whisper.cpp publishes no macOS
 release binary — only Ubuntu, Windows, and an xcframework — so

@@ -89,6 +89,18 @@ static const ble_uuid128_t gatt_svr_chr_display_uuid =
     BLE_UUID128_INIT(0x23, 0xe7, 0x6f, 0x5b, 0x36, 0x4f, 0x80, 0xb2,
                      0x84, 0x42, 0x10, 0x30, 0x9e, 0x93, 0x74, 0xe4);
 
+/* adea8e3b-23be-4c83-873a-cccf43c555af — ADPCM voice frames, device -> app.
+ * Declared here so the UUID is frozen and discoverable; the pipeline that
+ * fills it is milestone 3. */
+static const ble_uuid128_t gatt_svr_chr_voice_uuid =
+    BLE_UUID128_INIT(0xaf, 0x55, 0xc5, 0x43, 0xcf, 0xcc, 0x3a, 0x87,
+                     0x83, 0x4c, 0xbe, 0x23, 0x3b, 0x8e, 0xea, 0xad);
+
+/* d4f52189-0f32-4b6b-b880-00cc0dd7dd57 — session and device events. */
+static const ble_uuid128_t gatt_svr_chr_status_uuid =
+    BLE_UUID128_INIT(0x57, 0xdd, 0xd7, 0x0d, 0xcc, 0x00, 0x80, 0xb8,
+                     0x6b, 0x4b, 0x32, 0x0f, 0x89, 0x21, 0xf5, 0xd4);
+
 static const char* TAG = "wifi_prph_coex";
 
 static uint8_t gatt_svr_sec_test_static_val;
@@ -96,11 +108,15 @@ static uint8_t gatt_svr_sec_test_static_val;
 /* NimBLE fills this in during registration; notifications are addressed to
  * the value handle, not the declaration handle. */
 static uint16_t gatt_svr_chr_wifi_state_handle;
+static uint16_t gatt_svr_chr_voice_handle;
+static uint16_t gatt_svr_chr_status_handle;
 
 /* The connection we notify on, and whether its client has subscribed.
  * BLE_HS_CONN_HANDLE_NONE means "not connected". */
 static uint16_t gatt_svr_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool gatt_svr_wifi_state_subscribed;
+static bool gatt_svr_voice_subscribed;
+static bool gatt_svr_status_subscribed;
 
 /* Handle of the standard Service Changed characteristic (0x2A05 in the GATT
  * service, 0x1801), resolved at init. Subscribing to it is a central saying
@@ -121,6 +137,11 @@ static int
 gatt_svr_chr_access_display(uint16_t conn_handle, uint16_t attr_handle,
                             struct ble_gatt_access_ctxt *ctxt,
                             void *arg);
+
+static int
+gatt_svr_chr_access_notify_only(uint16_t conn_handle, uint16_t attr_handle,
+                                struct ble_gatt_access_ctxt *ctxt,
+                                void *arg);
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
     {
@@ -189,6 +210,25 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .access_cb = gatt_svr_chr_access_display,
                 .flags = BLE_GATT_CHR_F_WRITE |
                 BLE_GATT_CHR_F_WRITE_ENC
+            }, {
+                /*** Characteristic: voice frames (device -> app).
+                 *
+                 * UUID frozen now so the app, the firmware and the test suite
+                 * agree before there is anything to send; the mic pipeline
+                 * that fills it is milestone 3. A subscriber gets silence
+                 * until then, not an error.
+                 */
+                .uuid = &gatt_svr_chr_voice_uuid.u,
+                .access_cb = gatt_svr_chr_access_notify_only,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &gatt_svr_chr_voice_handle
+            }, {
+                /*** Characteristic: session and device events (device -> app).
+                 */
+                .uuid = &gatt_svr_chr_status_uuid.u,
+                .access_cb = gatt_svr_chr_access_notify_only,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &gatt_svr_chr_status_handle
             }, {
                 0, /* No more characteristics in this service. */
             }
@@ -420,6 +460,22 @@ gatt_svr_chr_access_display(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+/**
+ * Access handler for the notify-only characteristics (voice, status).
+ *
+ * Never actually reached: neither is readable or writable, so the stack has
+ * nothing to ask us. It exists because a characteristic definition wants a
+ * callback, and refusing outright is better than a NULL dereference if a
+ * future flag change quietly makes one of them readable.
+ */
+static int
+gatt_svr_chr_access_notify_only(uint16_t conn_handle, uint16_t attr_handle,
+                                struct ble_gatt_access_ctxt *ctxt,
+                                void *arg)
+{
+    return BLE_ATT_ERR_READ_NOT_PERMITTED;
+}
+
 const ble_uuid128_t *
 gatt_svr_service_uuid(void)
 {
@@ -437,6 +493,15 @@ gatt_svr_on_disconnect(void)
 {
     gatt_svr_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     gatt_svr_wifi_state_subscribed = false;
+    gatt_svr_voice_subscribed = false;
+    gatt_svr_status_subscribed = false;
+}
+
+bool
+gatt_svr_voice_is_subscribed(void)
+{
+    return gatt_svr_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+           gatt_svr_voice_subscribed;
 }
 
 /*
@@ -511,6 +576,25 @@ gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
         gatt_svr_wifi_state_subscribed = cur_notify != 0;
     }
 
+    if (attr_handle == gatt_svr_chr_voice_handle) {
+        gatt_svr_conn_handle = conn_handle;
+        gatt_svr_voice_subscribed = cur_notify != 0;
+    }
+
+    if (attr_handle == gatt_svr_chr_status_handle) {
+        gatt_svr_conn_handle = conn_handle;
+        gatt_svr_status_subscribed = cur_notify != 0;
+
+        /* Report the panel's geometry as soon as anyone is listening. It never
+         * changes while running, so subscribing is the only moment it needs
+         * sending — and this way the app never has to ask. */
+        if (cur_notify) {
+            uint8_t geometry[2] = { DISPLAY_COLS, DISPLAY_ROWS };
+            gatt_svr_notify_status(MONOCLE_STATUS_PANEL_GEOMETRY,
+                                   geometry, sizeof geometry);
+        }
+    }
+
     /* Wait for the peer to enable indications before announcing anything —
      * for a bonded central this arrives as a restore, shortly after
      * encryption. Sending earlier would be dropped for want of a subscriber. */
@@ -552,6 +636,42 @@ gatt_svr_notify_wifi_state(uint8_t state, const void *extra, uint8_t extra_len)
                                  gatt_svr_chr_wifi_state_handle, om);
     if (rc != 0) {
         ESP_LOGW(TAG, "wifi_state notify failed; rc=%d", rc);
+    }
+}
+
+void
+gatt_svr_notify_status(uint8_t event, const void *extra, uint8_t extra_len)
+{
+    uint8_t payload[1 + 2];   /* event byte + the widest extra (cols, rows) */
+    struct os_mbuf *om;
+    int rc;
+
+    if (gatt_svr_conn_handle == BLE_HS_CONN_HANDLE_NONE ||
+        !gatt_svr_status_subscribed) {
+        return;
+    }
+
+    if (extra_len > sizeof payload - 1) {
+        ESP_LOGE(TAG, "status extra too long (%u)", extra_len);
+        return;
+    }
+
+    payload[0] = event;
+    if (extra_len > 0) {
+        memcpy(&payload[1], extra, extra_len);
+    }
+
+    /* ble_gatts_notify_custom consumes the mbuf, including on failure. */
+    om = ble_hs_mbuf_from_flat(payload, 1 + extra_len);
+    if (om == NULL) {
+        ESP_LOGE(TAG, "out of mbufs; dropped status notification");
+        return;
+    }
+
+    rc = ble_gatts_notify_custom(gatt_svr_conn_handle,
+                                 gatt_svr_chr_status_handle, om);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "status notify failed; rc=%d", rc);
     }
 }
 
