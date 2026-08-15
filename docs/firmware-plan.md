@@ -101,6 +101,11 @@ optionally a snapshot of what they're looking at goes along with the query.
    notify → app writes a WAV to disk. Confirm sustained 64 kbps holds without
    drops (absorbs the old throughput test).
 
+   **Capture is done and verified audible** (2026-08-14) — `main/mic.c` plus
+   `test/capture_mic.py`; esp-sr and the `voice`/`status` characteristics are
+   in place. What remains is the AFE wiring, the detector, and the encoder.
+   See [voice-plan.md](voice-plan.md) for the phase breakdown.
+
    The trigger is **a stock WakeNet wake word from the start** ("Hi ESP" or
    "Alexa"), not a button: speaking is the product, and a button on a
    face-worn device is an interaction nobody would ship. This pulls ESP-SR and

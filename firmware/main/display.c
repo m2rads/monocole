@@ -574,6 +574,15 @@ void display_clear(void)
     display_post(DISPLAY_OP_CLEAR, NULL, 0);
 }
 
+void display_show_idle(bool app_connected)
+{
+    /* Deliberately not blank. A dark panel is indistinguishable from a device
+     * that has crashed or ignored you, and this is the wearer's only output.
+     * Placeholder wording until the panel gets a real UI. */
+    display_show(app_connected ? "minicole\nconnected"
+                               : "minicole\nconnect to app to continue");
+}
+
 esp_err_t display_init(void)
 {
     i2c_master_bus_config_t bus_config = {

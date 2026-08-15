@@ -60,6 +60,14 @@ bool display_post(uint8_t op, const char *text, size_t len);
 /* Convenience wrapper for a NUL-terminated replacement. */
 void display_show(const char *text);
 
+/* Shows the panel's resting state: what it displays when nothing else is
+ * happening. Defined here so boot, disconnect and the end of a voice session
+ * all say the same words instead of each inventing their own.
+ *
+ * `app_connected` picks between waiting for the app and being ready for it. A
+ * placeholder until the panel grows a real UI. */
+void display_show_idle(bool app_connected);
+
 /* Blanks the panel. */
 void display_clear(void);
 

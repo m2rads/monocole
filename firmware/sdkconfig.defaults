@@ -43,10 +43,17 @@ CONFIG_SPIRAM_SPEED_80M=y
 # implementations, which are algorithmic and ship no model files. Switching
 # either to its neural version (nsnet2, vadnet1) adds to the model partition.
 #
-# Swapping the wake word is one line here: the component also carries Alexa
-# (SR_WN_WN9_ALEXA), Jarvis (SR_WN_WN9_JARVIS_TTS) and a dozen more English
-# phrases. Nothing outside this file — and nothing on the wire — knows which.
-CONFIG_SR_WN_WN9_HIESP=y
+# Swapping the wake word is one line here: the component carries about twenty
+# English phrases — Hi ESP (SR_WN_WN9_HIESP), Alexa (SR_WN_WN9_ALEXA),
+# Computer, Mycroft and so on. Nothing outside this file, and nothing on the
+# wire, knows which one is loaded.
+#
+# Jarvis over Hi ESP because it is distinctive enough not to be said by
+# accident, and unlike Alexa there is no chance of an Echo in the room
+# answering instead. Each model is ~292 KB; loading several is supported (up to
+# five, told apart by wake_word_index) but would outgrow the 512 K model
+# partition.
+CONFIG_SR_WN_WN9_JARVIS_TTS=y
 
 # WiFi config
 CONFIG_ESP_WIFI_IRAM_OPT=n

@@ -108,6 +108,10 @@ void gatt_svr_notify_status(uint8_t event, const void *extra, uint8_t extra_len)
  * before encoding, since ADPCM for an empty room is wasted CPU. */
 bool gatt_svr_voice_is_subscribed(void);
 
+/* Whether a central is connected at all. Used to pick what the panel rests on
+ * once a voice session ends. */
+bool gatt_svr_is_connected(void);
+
 void gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
                            int cur_notify, int cur_indicate);
 

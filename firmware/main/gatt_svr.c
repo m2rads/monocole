@@ -498,6 +498,12 @@ gatt_svr_on_disconnect(void)
 }
 
 bool
+gatt_svr_is_connected(void)
+{
+    return gatt_svr_conn_handle != BLE_HS_CONN_HANDLE_NONE;
+}
+
+bool
 gatt_svr_voice_is_subscribed(void)
 {
     return gatt_svr_conn_handle != BLE_HS_CONN_HANDLE_NONE &&

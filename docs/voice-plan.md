@@ -185,19 +185,43 @@ Update `test/protocol.py` with an independent Python IMA decoder — deliberatel
 not shared with the firmware, so drift on either side fails a test instead of
 being mirrored into it, which is how the existing wire tests are built.
 
-## Phase 3 — capture, proven audible on its own
+## Phase 3 — capture, proven audible on its own — **done, 2026-08-14**
 
 `main/mic.c`: PDM RX on GPIO42 (CLK) and GPIO41 (DATA) — the XIAO Sense's
-onboard mic — 16 kHz mono 16-bit, I2S DMA into a ring buffer, drained by its
-own FreeRTOS task. No detector, no encoder.
+onboard mic — 16 kHz mono 16-bit, read through the chip's PDM-to-PCM filter so
+samples come back as ordinary signed 16-bit. No detector, no encoder.
 
-**Prove the audio is intelligible before wiring anything to it.** Dump a few
-seconds of raw PCM over the Wi-Fi data plane — the bulk frame type already
-exists and this is exactly the bulk case — write a WAV, and listen to it.
+**The audio was confirmed intelligible by ear** before anything was wired to
+it. The dump goes over the serial console rather than the Wi-Fi socket as
+originally planned — the board could not reach a network, and the console
+needs neither Wi-Fi nor the app. `test/capture_mic.py` collects it into a WAV.
 
-This ordering is the whole mitigation for doing the wake word early: a silent
+Measured, three seconds each:
+
+| | quiet room | speaking at the board |
+|---|---|---|
+| peak (DC removed) | 357 | **4536** |
+| rms | 118 | **707** |
+| distinct values | 508 | **4857** |
+
+Useful beyond the gate: **the noise floor sits around rms 118 and speech around
+700**, roughly a 6× separation. That is the number to hold against the VAD
+threshold in phase 4 — and it is why `capture_mic.py` calls anything under 500
+inconclusive rather than passing it.
+
+This ordering was the whole mitigation for doing the wake word early: a silent
 pipeline otherwise has two possible causes, and debugging a detector against a
 mic that was never producing sound is a day nobody gets back.
+
+Two things the dump path cost, both worth knowing before writing another
+console-heavy debug tool:
+
+- **`vTaskDelay(pdMS_TO_TICKS(2))` truncates to zero ticks** at a 100 Hz tick,
+  so it yields nothing. Blocking in `uart_tx_char` without yielding starves the
+  idle task, trips the task watchdog, and prints a backtrace into the middle of
+  the stream it is complaining about. Use `vTaskDelay(1)`.
+- **Only one process can read the port.** An open `idf.py monitor` swallows the
+  dump and the script sees a port that reports data and returns none.
 
 ## Phase 4 — AFE and the wake word
 
