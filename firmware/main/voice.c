@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_wn_models.h"
 #include "model_path.h"
 
 #include "bleprph.h"
@@ -40,23 +41,23 @@ static const char *TAG = "monocle_voice";
 #define VOICE_TASK_PRIO         5
 
 /*
- * How certain WakeNet has to be before it says the wake word was spoken.
+ * How certain WakeNet has to be before it says the wake word was spoken, for
+ * models trained on synthesized speech.
  *
  * Valid range is 0.4 to 0.9999; models ship with their own default, around
  * 0.63. Lower is more sensitive and more false triggers — and false triggers
  * are expensive here, because each one opens a session and puts "listening"
  * in front of the wearer.
  *
- * This is lowered from the default because the current wake word is a `_tts`
- * model: Espressif trains those on synthesized speech rather than real
- * recordings, and they are correspondingly less sure about actual voices.
- * Only "Hi ESP" and "Alexa" are trained on real data in the English set. If
- * lowering this does not make the word reliable, that is the trade to revisit
- * rather than pushing the threshold further down.
+ * Applied only to `_tts` models. Espressif trains those on synthesized speech
+ * rather than real recordings, and they are correspondingly less sure about
+ * actual voices; of the English models only "Hi ESP" and "Alexa" use real
+ * data. Those keep their shipped default, because they do not need the help
+ * and lowering them would only buy false triggers.
  *
- * Set to 0 to keep whatever the model shipped with.
+ * Set to 0 to leave every model alone.
  */
-#define VOICE_WAKENET_THRESHOLD 0.5f
+#define VOICE_TTS_THRESHOLD     0.63f
 
 static esp_afe_sr_data_t *s_afe_data;
 static const esp_afe_sr_iface_t *s_afe;
@@ -189,6 +190,44 @@ voice_fetch_task(void *arg)
     }
 }
 
+/*
+ * Lists the loaded wake words and gives the synthesized-speech ones a hand.
+ *
+ * WakeNet numbers its models from 1 in the order they were loaded, which is
+ * the order they appear in the model list. If that assumption were ever wrong
+ * the cost is a threshold applied to the wrong word — a sensitivity change,
+ * not a failure — and the log below makes it visible.
+ */
+static void
+voice_tune_thresholds(srmodel_list_t *models)
+{
+    int index = 0;
+
+    for (int i = 0; i < models->num; i++) {
+        const char *name = models->model_name[i];
+        if (strncmp(name, ESP_WN_PREFIX, strlen(ESP_WN_PREFIX)) != 0) {
+            continue;   /* not a wake word model */
+        }
+
+        index++;
+        bool synthesized = strstr(name, "_tts") != NULL;
+        ESP_LOGI(TAG, "wake word %d: %s%s", index, name,
+                 synthesized ? " (trained on synthesized speech)" : "");
+
+        /* The API only addresses the first two. */
+        if (!synthesized || VOICE_TTS_THRESHOLD <= 0.0f || index > 2) {
+            continue;
+        }
+
+        if (s_afe->set_wakenet_threshold(s_afe_data, index,
+                                         VOICE_TTS_THRESHOLD) != 1) {
+            ESP_LOGW(TAG, "could not lower the threshold for %s", name);
+        } else {
+            ESP_LOGI(TAG, "  threshold lowered to %.2f", VOICE_TTS_THRESHOLD);
+        }
+    }
+}
+
 esp_err_t
 voice_init(void)
 {
@@ -228,16 +267,7 @@ voice_init(void)
     s_feed_samples = s_afe->get_feed_chunksize(s_afe_data)
                      * s_afe->get_feed_channel_num(s_afe_data);
 
-    if (VOICE_WAKENET_THRESHOLD > 0.0f) {
-        /* Index 1 is the first (and only) wakenet loaded. */
-        if (s_afe->set_wakenet_threshold(s_afe_data, 1,
-                                         VOICE_WAKENET_THRESHOLD) != 1) {
-            ESP_LOGW(TAG, "could not set the wake word threshold");
-        } else {
-            ESP_LOGI(TAG, "wake word threshold set to %.2f",
-                     VOICE_WAKENET_THRESHOLD);
-        }
-    }
+    voice_tune_thresholds(models);
 
     ESP_LOGI(TAG, "listening for the wake word (%d samples per feed, "
                   "%d ms of silence ends an utterance)",

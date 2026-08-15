@@ -15,11 +15,15 @@
 # WakeNet's code lands in the app rather than the model partition. 3M is sized
 # for the camera and whatever milestone 6 adds, not just for today.
 #
-# Still 4.4 MB unallocated after this. OTA would want two app slots and an
+# model is 1M for two wake words at ~292 KB each, with room for a third. It is
+# last in the table, so resizing it moves nothing else — in particular it does
+# not move nvs, so growing it costs neither the bond nor the stored network.
+#
+# Still ~3.9 MB unallocated after this. OTA would want two app slots and an
 # otadata partition, which is a different table again — see firmware-plan.md.
 #
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   24K
 phy_init,   data, phy,     0xf000,   4K
 factory,    app,  factory, 0x10000,  3M
-model,      data, spiffs,  ,         512K
+model,      data, spiffs,  ,         1M

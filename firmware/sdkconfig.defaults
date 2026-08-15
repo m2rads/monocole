@@ -48,12 +48,20 @@ CONFIG_SPIRAM_SPEED_80M=y
 # Computer, Mycroft and so on. Nothing outside this file, and nothing on the
 # wire, knows which one is loaded.
 #
-# Jarvis over Hi ESP because it is distinctive enough not to be said by
-# accident, and unlike Alexa there is no chance of an Echo in the room
-# answering instead. Each model is ~292 KB; loading several is supported (up to
-# five, told apart by wake_word_index) but would outgrow the 512 K model
-# partition.
+# Two are loaded, and either one wakes the device. WakeNet supports up to five,
+# told apart by wakenet_model_index.
+#
+# Jarvis is the one to say: distinctive, and unlike Alexa no Echo in the room
+# answers it. But it is a `_tts` model — trained on synthesized speech rather
+# than real recordings — and it is correspondingly less certain about actual
+# voices, which shows up as having to repeat yourself.
+#
+# Hi ESP is kept alongside it as the one that always works. Only Hi ESP and
+# Alexa are trained on real data in the English set, and Hi ESP was reliable
+# first try on hardware. Two models cost ~584 KB, which is why partitions.csv
+# gives `model` 1 M.
 CONFIG_SR_WN_WN9_JARVIS_TTS=y
+CONFIG_SR_WN_WN9_HIESP=y
 
 # WiFi config
 CONFIG_ESP_WIFI_IRAM_OPT=n
