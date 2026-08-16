@@ -164,11 +164,15 @@ pub fn start_recording(state: State<'_, RecorderState>) -> Result<(), String> {
 }
 
 /// Stops recording and returns what whisper made of it.
+///
+/// An empty string means whisper heard no speech — it labels silence rather
+/// than failing, and `whisper::transcribe` flattens those labels to nothing.
+/// The caller says so in its own words.
 #[tauri::command]
 pub async fn stop_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
-) -> Result<Transcription, String> {
+) -> Result<String, String> {
     let recording = state
         .0
         .lock()
@@ -192,9 +196,7 @@ pub async fn stop_recording(
     }
 
     let wav = voice::wav_from_pcm(&pcm, TARGET_RATE);
-    let text = whisper::transcribe(&app, wav).await?;
-
-    Ok(Transcription { text, level })
+    whisper::transcribe(&app, wav).await
 }
 
 /// Loudness with any DC offset removed — the same measure the monocle path
@@ -212,15 +214,6 @@ fn rms(samples: &[i16]) -> f32 {
         })
         .sum();
     (squares / samples.len() as f64).sqrt() as f32
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Transcription {
-    pub text: String,
-    /// Surfaced so a silent microphone is visible as such: whisper invents
-    /// text when handed silence rather than failing.
-    pub level: f32,
 }
 
 #[cfg(test)]

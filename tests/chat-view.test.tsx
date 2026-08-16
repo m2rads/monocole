@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { ChatView } from "@/components/chat-view"
 import { SessionsProvider } from "@/hooks/use-sessions"
 
-import { emitTauriEvent, invokeCalls } from "./tauri-mocks"
+import { emitTauriEvent, invokeCalls, invokeMock } from "./tauri-mocks"
 
 function renderChat() {
   return render(
@@ -13,6 +13,12 @@ function renderChat() {
       <ChatView />
     </SessionsProvider>
   )
+}
+
+/** Makes stop_recording return one transcript; everything else no-ops. */
+function stubRecording(transcript: string) {
+  invokeMock.mockImplementation((async (cmd: string) =>
+    cmd === "stop_recording" ? transcript : undefined) as never)
 }
 
 function sessionIdFromLastCall() {
@@ -85,6 +91,41 @@ describe("ChatView", () => {
       "Third{Enter}"
     )
     expect(invokeCalls("chat_stream")).toHaveLength(2)
+  })
+
+  it("dictates into the composer rather than sending straight away", async () => {
+    const user = userEvent.setup()
+    stubRecording("spoken words")
+    renderChat()
+
+    await user.click(screen.getByLabelText("Dictate"))
+    // The open microphone is visible as such, and the control now stops it.
+    const stop = await screen.findByLabelText("Stop dictating")
+
+    await user.click(stop)
+    expect(await screen.findByDisplayValue("spoken words")).toBeInTheDocument()
+    // Nothing was sent — the transcript is editable first.
+    expect(invokeCalls("chat_stream")).toHaveLength(0)
+  })
+
+  it("says so when the microphone heard no words", async () => {
+    const user = userEvent.setup()
+    // Rust flattens whisper's "[BLANK_AUDIO]" to nothing, so an empty
+    // transcript is the signal — and it has to be said, or a recording that
+    // produced no words looks like the app ignoring you.
+    stubRecording("")
+    renderChat()
+
+    await user.click(screen.getByLabelText("Dictate"))
+    await user.click(await screen.findByLabelText("Stop dictating"))
+
+    expect(
+      await screen.findByText(
+        "Couldn't capture anything, try speaking louder."
+      )
+    ).toBeInTheDocument()
+    // And nothing lands in the composer.
+    expect(screen.getByPlaceholderText("How can I help you?")).toHaveValue("")
   })
 
   it("renders stream errors inline", async () => {

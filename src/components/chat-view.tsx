@@ -4,6 +4,11 @@ import { Loader2Icon, MicIcon, SquareIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useRecorder, type RecorderStatus } from "@/hooks/use-recorder"
 import { useSessions, type ChatMessage } from "@/hooks/use-sessions"
 import { cn } from "@/lib/utils"
@@ -51,48 +56,66 @@ export function ChatView() {
         submit()
       }}
     >
-      <Textarea
-        ref={textareaRef}
-        value={input}
-        onChange={(event) => setInput(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault()
-            submit()
+      {/* The mic sits inside the field, anchored to the bottom right. Bottom
+          rather than top because the textarea grows with its content, and a
+          control that drifts down the page as you type reads as a different
+          control each time. */}
+      <div className="relative">
+        <Textarea
+          ref={textareaRef}
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault()
+              submit()
+            }
+          }}
+          placeholder={
+            recorder.status === "recording"
+              ? "Listening…"
+              : recorder.status === "transcribing"
+                ? "Transcribing…"
+                : streaming
+                  ? "Generating…"
+                  : "How can I help you?"
           }
-        }}
-        placeholder={
-          recorder.status === "recording"
-            ? "Listening…"
-            : recorder.status === "transcribing"
-              ? "Transcribing…"
-              : streaming
-                ? "Generating…"
-                : "How can I help you?"
-        }
-        autoFocus
-      />
-      {/* Its own row under the composer rather than floating inside it: the
-          textarea is borderless by design, so a control overlapping it is
-          genuinely hard to see. */}
-      <div className="mt-2 flex items-center gap-2">
-        <DictateButton recorder={recorder} />
-        {recorder.error ? (
-          <span className="text-xs text-destructive">{recorder.error}</span>
-        ) : recorder.level !== null ? (
-          // The number that says whether the microphone actually heard
-          // anything. Whisper invents text when handed silence, so a quiet
-          // recording is worth knowing about before blaming the model.
-          <span className="text-xs text-muted-foreground">
-            Recorded at level {Math.round(recorder.level)}
-            {recorder.level < 400 && " — quiet; try speaking closer"}
-          </span>
-        ) : (
-          <span className="text-xs text-muted-foreground">
-            or dictate with your Mac's microphone
-          </span>
-        )}
+          // `min-h-11` is one line of text plus its padding and nothing more,
+          // so the field hugs its content and the last line sits level with
+          // the button rather than floating above it. The arithmetic holds at
+          // any height: both the line and the button move down by exactly one
+          // line-height as the field grows.
+          //
+          // The right padding is room for the button, so a long line never
+          // runs underneath it — and more of it while the elapsed count is
+          // alongside.
+          className={cn(
+            "min-h-11",
+            recorder.status === "recording" ? "pr-20" : "pr-9"
+          )}
+          // A textarea is two rows tall by default, which would leave the
+          // field a line taller than its content and put the button back below
+          // the text. `field-sizing-content` still grows it as you type.
+          rows={1}
+          autoFocus
+        />
+        <div className="absolute right-0 bottom-2 flex items-center gap-1.5">
+          {recorder.status === "recording" && (
+            // The elapsed count is the honest signal that the microphone is
+            // open — the icon alone could be mistaken for a hover state.
+            <span className="text-xs text-destructive tabular-nums">
+              {recorder.seconds.toFixed(1)}s
+            </span>
+          )}
+          <DictateButton recorder={recorder} />
+        </div>
       </div>
+      {/* Only ever shown when something went wrong. The affordance itself is
+          the icon and its tooltip, so a standing line of instructions under
+          every composer would be noise. */}
+      {recorder.error && (
+        <p className="mt-2 text-xs text-destructive">{recorder.error}</p>
+      )}
     </form>
   )
 
@@ -140,8 +163,9 @@ export function ChatView() {
  * Mic button for the composer.
  *
  * Three states in one control: press to record, press again to stop, then a
- * spinner while whisper works. Recording is deliberately loud visually — a
- * microphone that is on without the user realising is the failure worth
+ * spinner while whisper works. Idle is deliberately quiet — a muted glyph that
+ * only picks up a background on hover — but recording is not, because a
+ * microphone that is open without the user realising is the failure worth
  * designing against.
  */
 function DictateButton({
@@ -154,35 +178,54 @@ function DictateButton({
     stop: () => void
   }
 }) {
+  // Whisper is working and there is nothing to press. Rendered outside the
+  // tooltip because a disabled trigger never receives the hover that would
+  // open one.
   if (recorder.status === "transcribing") {
-    return (
-      <Button type="button" size="sm" variant="outline" disabled>
-        <Loader2Icon data-icon="inline-start" className="animate-spin" />
-        Transcribing…
-      </Button>
-    )
-  }
-
-  if (recorder.status === "recording") {
     return (
       <Button
         type="button"
-        size="sm"
-        variant="destructive"
-        onClick={recorder.stop}
-        className="tabular-nums"
+        size="icon-xs"
+        variant="ghost"
+        className="text-muted-foreground"
+        disabled
+        aria-label="Transcribing"
       >
-        <SquareIcon data-icon="inline-start" className="fill-current" />
-        Stop · {recorder.seconds.toFixed(1)}s
+        <Loader2Icon className="size-4 animate-spin" />
       </Button>
     )
   }
 
+  const recording = recorder.status === "recording"
+
   return (
-    <Button type="button" size="sm" variant="outline" onClick={recorder.start}>
-      <MicIcon data-icon="inline-start" />
-      Dictate
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            onClick={recording ? recorder.stop : recorder.start}
+            aria-label={recording ? "Stop dictating" : "Dictate"}
+            className={cn(
+              "text-muted-foreground hover:text-foreground",
+              recording &&
+                "text-destructive hover:bg-destructive/10 hover:text-destructive"
+            )}
+          >
+            {recording ? (
+              <SquareIcon className="size-3.5 fill-current" />
+            ) : (
+              <MicIcon className="size-4" />
+            )}
+          </Button>
+        }
+      />
+      <TooltipContent>
+        {recording ? "Stop dictating" : "Dictate"}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

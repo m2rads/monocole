@@ -47,6 +47,41 @@ async fn an_empty_transcript_is_not_an_error() {
 }
 
 #[tokio::test]
+async fn a_transcript_of_nothing_but_labels_comes_back_empty() {
+    // Whisper annotates rather than returning nothing, and "[BLANK_AUDIO]" in
+    // a chat bubble is worse than an empty one — the caller has a better
+    // sentence for it.
+    for labelled in [
+        r#"{"text":"[BLANK_AUDIO]"}"#,
+        r#"{"text":" [ Silence ] "}"#,
+        // Whatever punctuation the label was wearing goes with it.
+        r#"{"text":"[BLANK_AUDIO]."}"#,
+        r#"{"text":"[MUSIC] [SOUND]"}"#,
+    ] {
+        let port = serving(labelled);
+        assert_eq!(transcribe_wav(port, vec![0; 64]).await.unwrap(), "");
+    }
+}
+
+#[tokio::test]
+async fn words_alongside_a_label_are_kept() {
+    // Only a transcript that is *entirely* annotation is nothing. Speech is
+    // never thrown away because whisper noted a sound in the middle of it.
+    let port = serving(r#"{"text":"[BLANK_AUDIO] turn the light on"}"#);
+    assert_eq!(
+        transcribe_wav(port, vec![0; 64]).await.unwrap(),
+        "turn the light on"
+    );
+
+    // And a sentence of its own that happens to use brackets is untouched.
+    let port = serving(r#"{"text":"remind me (tomorrow) to call"}"#);
+    assert_eq!(
+        transcribe_wav(port, vec![0; 64]).await.unwrap(),
+        "remind me (tomorrow) to call"
+    );
+}
+
+#[tokio::test]
 async fn a_server_error_is_reported_with_its_body() {
     let port = spawn_server(|request| {
         let _ = request.respond(

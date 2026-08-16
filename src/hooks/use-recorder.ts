@@ -4,12 +4,6 @@ import { invoke } from "@tauri-apps/api/core"
 
 export type RecorderStatus = "idle" | "recording" | "transcribing"
 
-type Transcription = {
-  text: string
-  /** Loudness of the recording, DC offset removed. */
-  level: number
-}
-
 /**
  * Records from the Mac's microphone and transcribes it with whisper.
  *
@@ -26,7 +20,6 @@ export function useRecorder(onTranscript: (text: string) => void) {
   const [status, setStatus] = React.useState<RecorderStatus>("idle")
   const [error, setError] = React.useState<string | null>(null)
   const [seconds, setSeconds] = React.useState(0)
-  const [level, setLevel] = React.useState<number | null>(null)
 
   // Tick the elapsed counter while recording.
   React.useEffect(() => {
@@ -41,7 +34,6 @@ export function useRecorder(onTranscript: (text: string) => void) {
 
   const start = React.useCallback(async () => {
     setError(null)
-    setLevel(null)
     setSeconds(0)
     try {
       await invoke("start_recording")
@@ -54,14 +46,15 @@ export function useRecorder(onTranscript: (text: string) => void) {
   const stop = React.useCallback(async () => {
     setStatus("transcribing")
     try {
-      const result = await invoke<Transcription>("stop_recording")
-      setLevel(result.level)
-      if (result.text) {
-        onTranscript(result.text)
+      const text = await invoke<string>("stop_recording")
+      if (text) {
+        onTranscript(text)
       } else {
-        // Whisper returns nothing rather than failing when it hears no
-        // speech, so say so instead of appearing to do nothing.
-        setError("Whisper heard no speech in that recording.")
+        // Whisper labels silence rather than failing on it, and Rust turns
+        // those labels into nothing — so an empty string here is the one
+        // signal that the microphone heard no words, and it has to be said
+        // out loud or the app looks like it ignored you.
+        setError("Couldn't capture anything, try speaking louder.")
       }
     } catch (err) {
       setError(String(err))
@@ -70,5 +63,5 @@ export function useRecorder(onTranscript: (text: string) => void) {
     }
   }, [onTranscript])
 
-  return { status, error, seconds, level, start, stop }
+  return { status, error, seconds, start, stop }
 }

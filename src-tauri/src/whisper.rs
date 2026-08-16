@@ -193,7 +193,47 @@ pub async fn transcribe_wav(port: u16, wav: Vec<u8>) -> Result<String, String> {
         .as_str()
         .ok_or("whisper-server returned no text field")?;
 
-    Ok(text.trim().to_string())
+    Ok(strip_non_speech(text))
+}
+
+/// Removes whisper's non-speech labels, and returns nothing if that is all
+/// there was.
+///
+/// Whisper does not return an empty string when it hears no words — it
+/// *annotates*: silence comes back as `[BLANK_AUDIO]`, and room noise as
+/// `[ Silence ]`, `[MUSIC]` and similar. Putting one of those in a chat bubble
+/// is worse than putting nothing there, and both callers already treat an
+/// empty transcript as "no speech" and say so in their own words.
+///
+/// Only square brackets, because whisper never spells spoken words with them
+/// — parentheses it does, so `remind me (tomorrow) to call` keeps every
+/// character. A remainder with no letters or digits in it is nothing too: the
+/// full stop left behind by `[BLANK_AUDIO].` is not a transcript.
+fn strip_non_speech(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    let mut depth = 0usize;
+
+    for ch in text.chars() {
+        match ch {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => cleaned.push(ch),
+            _ => {}
+        }
+    }
+
+    // An unclosed bracket is a transcript this does not understand, and
+    // swallowing the rest of a sentence over one stray character would be a
+    // far worse failure than leaving it in.
+    if depth != 0 {
+        return text.trim().to_string();
+    }
+
+    let cleaned = cleaned.trim();
+    if !cleaned.chars().any(char::is_alphanumeric) {
+        return String::new();
+    }
+    cleaned.to_string()
 }
 
 /// Transcribes an utterance, bringing the sidecar up if it is not running.
