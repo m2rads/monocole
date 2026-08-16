@@ -1,6 +1,10 @@
 import * as React from "react"
 
+import { Loader2Icon, MicIcon, SquareIcon } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { useRecorder, type RecorderStatus } from "@/hooks/use-recorder"
 import { useSessions, type ChatMessage } from "@/hooks/use-sessions"
 import { cn } from "@/lib/utils"
 
@@ -9,6 +13,16 @@ export function ChatView() {
   const [input, setInput] = React.useState("")
   const bottomRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+
+  // Dictation lands in the composer rather than sending straight away: seeing
+  // what whisper heard, and being able to fix it, matters more than one less
+  // keystroke — especially while the model is the thing under test.
+  const recorder = useRecorder(
+    React.useCallback((text: string) => {
+      setInput((current) => (current ? `${current} ${text}` : text))
+      textareaRef.current?.focus()
+    }, [])
+  )
 
   const messages = activeSession?.messages ?? []
   const streaming =
@@ -47,9 +61,38 @@ export function ChatView() {
             submit()
           }
         }}
-        placeholder={streaming ? "Generating…" : "How can I help you?"}
+        placeholder={
+          recorder.status === "recording"
+            ? "Listening…"
+            : recorder.status === "transcribing"
+              ? "Transcribing…"
+              : streaming
+                ? "Generating…"
+                : "How can I help you?"
+        }
         autoFocus
       />
+      {/* Its own row under the composer rather than floating inside it: the
+          textarea is borderless by design, so a control overlapping it is
+          genuinely hard to see. */}
+      <div className="mt-2 flex items-center gap-2">
+        <DictateButton recorder={recorder} />
+        {recorder.error ? (
+          <span className="text-xs text-destructive">{recorder.error}</span>
+        ) : recorder.level !== null ? (
+          // The number that says whether the microphone actually heard
+          // anything. Whisper invents text when handed silence, so a quiet
+          // recording is worth knowing about before blaming the model.
+          <span className="text-xs text-muted-foreground">
+            Recorded at level {Math.round(recorder.level)}
+            {recorder.level < 400 && " — quiet; try speaking closer"}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            or dictate with your Mac's microphone
+          </span>
+        )}
+      </div>
     </form>
   )
 
@@ -93,6 +136,56 @@ export function ChatView() {
   )
 }
 
+/**
+ * Mic button for the composer.
+ *
+ * Three states in one control: press to record, press again to stop, then a
+ * spinner while whisper works. Recording is deliberately loud visually — a
+ * microphone that is on without the user realising is the failure worth
+ * designing against.
+ */
+function DictateButton({
+  recorder,
+}: {
+  recorder: {
+    status: RecorderStatus
+    seconds: number
+    start: () => void
+    stop: () => void
+  }
+}) {
+  if (recorder.status === "transcribing") {
+    return (
+      <Button type="button" size="sm" variant="outline" disabled>
+        <Loader2Icon data-icon="inline-start" className="animate-spin" />
+        Transcribing…
+      </Button>
+    )
+  }
+
+  if (recorder.status === "recording") {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="destructive"
+        onClick={recorder.stop}
+        className="tabular-nums"
+      >
+        <SquareIcon data-icon="inline-start" className="fill-current" />
+        Stop · {recorder.seconds.toFixed(1)}s
+      </Button>
+    )
+  }
+
+  return (
+    <Button type="button" size="sm" variant="outline" onClick={recorder.start}>
+      <MicIcon data-icon="inline-start" />
+      Dictate
+    </Button>
+  )
+}
+
 function MessageBubble({
   message,
   streaming,
@@ -101,6 +194,38 @@ function MessageBubble({
   streaming: boolean
 }) {
   if (message.role === "user") {
+    // A spoken turn whose words have not arrived yet. Showing the state
+    // rather than an empty bubble is the difference between "it heard me"
+    // and "nothing happened".
+    if (message.voiceState) {
+      return (
+        <div className="ml-auto flex max-w-[80%] items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+          <MicIcon className="size-3.5 shrink-0" />
+          <span className="animate-pulse">
+            {message.voiceState === "listening"
+              ? "Listening…"
+              : "Transcribing…"}
+          </span>
+        </div>
+      )
+    }
+
+    // A spoken turn can fail before it has any words — the mic, the link, or
+    // transcription. Without this the bubble renders empty and the failure is
+    // invisible, which looks like the app ignoring you.
+    if (message.error) {
+      return (
+        <div className="ml-auto max-w-[80%] text-right text-sm">
+          {message.content && (
+            <p className="mb-1 rounded-lg bg-muted px-3 py-2 whitespace-pre-wrap">
+              {message.content}
+            </p>
+          )}
+          <p className="text-destructive">{message.error}</p>
+        </div>
+      )
+    }
+
     return (
       <div className="ml-auto max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
         {message.content}

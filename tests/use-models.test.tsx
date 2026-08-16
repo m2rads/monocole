@@ -10,6 +10,7 @@ const manifest: ModelManifest = {
   version: 1,
   models: [
     {
+      kind: "chat",
       id: "test-model",
       name: "Test model",
       description: "A model for tests",

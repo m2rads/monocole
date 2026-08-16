@@ -29,6 +29,20 @@ static const char *TAG = "monocle_voice";
 #define VOICE_END_SILENCE_MS    800
 
 /*
+ * How long to wait for the speaker to begin, after the wake word.
+ *
+ * Nobody starts talking the instant the word leaves their mouth: they pause,
+ * often to check the panel says "listening". Without this the silence timer
+ * starts immediately and a normal pause ends the utterance before a word is
+ * said — which shows up as an 800 ms capture containing nothing, and a
+ * transcript of "[BLANK_AUDIO]".
+ *
+ * Generous, because the cost of waiting is a second of nothing while the cost
+ * of being too strict is losing the sentence entirely.
+ */
+#define VOICE_LEAD_IN_MS        4000
+
+/*
  * A hard ceiling on one utterance.
  *
  * The VAD is the normal way out. This exists because a noisy room can keep
@@ -208,6 +222,9 @@ voice_fetch_task(void *arg)
 {
     int silence_ms = 0;
     int elapsed_ms = 0;
+    /* The silence countdown does not start until the speaker actually
+     * begins — see VOICE_LEAD_IN_MS. */
+    bool heard_speech = false;
 
     while (true) {
         afe_fetch_result_t *result = s_afe->fetch(s_afe_data);
@@ -230,6 +247,7 @@ voice_fetch_task(void *arg)
                 voice_start_utterance(result);
                 silence_ms = 0;
                 elapsed_ms = 0;
+                heard_speech = false;
             }
             continue;
         }
@@ -238,13 +256,27 @@ voice_fetch_task(void *arg)
                      result->data_size / (int)sizeof(int16_t));
 
         elapsed_ms += frame_ms;
-        silence_ms = (result->vad_state == VAD_SPEECH) ? 0
-                                                       : silence_ms + frame_ms;
 
-        if (silence_ms >= VOICE_END_SILENCE_MS) {
+        if (result->vad_state == VAD_SPEECH) {
+            heard_speech = true;
+            silence_ms = 0;
+        } else {
+            silence_ms += frame_ms;
+        }
+
+        if (heard_speech) {
+            /* They spoke and have now stopped for long enough. */
+            if (silence_ms >= VOICE_END_SILENCE_MS) {
+                voice_end_utterance(MONOCLE_VOICE_END_VAD);
+            } else if (elapsed_ms >= VOICE_MAX_MS) {
+                voice_end_utterance(MONOCLE_VOICE_END_CAPPED);
+            }
+        } else if (silence_ms >= VOICE_LEAD_IN_MS) {
+            /* Woken, but nobody ever started talking — a false trigger, or
+             * the wake word said on its own. Ending on the same VAD reason
+             * is right: there is genuinely no speech to transcribe. */
+            ESP_LOGI(TAG, "no speech after the wake word");
             voice_end_utterance(MONOCLE_VOICE_END_VAD);
-        } else if (elapsed_ms >= VOICE_MAX_MS) {
-            voice_end_utterance(MONOCLE_VOICE_END_CAPPED);
         }
     }
 }

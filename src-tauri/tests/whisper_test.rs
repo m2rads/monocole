@@ -76,7 +76,6 @@ async fn unreachable_server_is_an_error() {
 
 #[tokio::test]
 async fn posts_the_wav_as_multipart_to_inference() {
-    use std::io::Read;
     use std::sync::{Arc, Mutex};
 
     let seen: Arc<Mutex<Option<(String, String, usize)>>> = Arc::new(Mutex::new(None));

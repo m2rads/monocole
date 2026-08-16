@@ -27,12 +27,7 @@ const WIFI_CREDS_CHR_UUID: Uuid = uuid!("2c9b4a45-d3a5-4bf9-ac60-1f5f2e98db3c");
 const WIFI_STATE_CHR_UUID: Uuid = uuid!("1ad1e743-dcae-422d-a7a8-68b4d695ac8b");
 const WIFI_CONTROL_CHR_UUID: Uuid = uuid!("e4782756-b76f-482c-9a0a-8c546a9134f1");
 const DISPLAY_CHR_UUID: Uuid = uuid!("e474939e-3010-4284-b280-4f365b6fe723");
-// Frozen ahead of the firmware that fills them, so these three implementations
-// and the test suite cannot each invent their own. Nothing subscribes yet —
-// see TODO(monocle-protocol) below.
-#[expect(dead_code, reason = "subscribed in the voice milestone")]
 const VOICE_CHR_UUID: Uuid = uuid!("adea8e3b-23be-4c83-873a-cccf43c555af");
-#[expect(dead_code, reason = "subscribed in the voice milestone")]
 const STATUS_CHR_UUID: Uuid = uuid!("d4f52189-0f32-4b6b-b880-00cc0dd7dd57");
 
 // Mirrors the 802.11 limits the firmware enforces. Checked here too so a bad
@@ -66,12 +61,11 @@ const GREETING: &str = "minicole\nconnected";
 //
 // TODO(auto-reconnect): persist the chosen device id in settings.json and
 // reconnect to it automatically on launch / signal loss.
-// TODO(monocle-protocol): after connect, subscribe to the voice and status
-// characteristics and route them into a session, and write control/tokens.
-// `discover_services()` below currently runs only as a connectivity check —
-// its result is dropped. Stills do NOT arrive here: they come over a TCP
-// socket on the Wi-Fi data plane, bootstrapped by writing credentials to the
-// wifi_creds characteristic. See docs/protocol.md.
+// TODO(monocle-protocol): `control` is still unassigned — capture and any
+// other app-to-device command will need it. `discover_services()` below runs
+// only as a connectivity check; its result is dropped. Stills do NOT arrive
+// here: they come over a TCP socket on the Wi-Fi data plane, bootstrapped by
+// writing credentials to the wifi_creds characteristic. See docs/protocol.md.
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -281,20 +275,35 @@ async fn connected_peripheral(app: &AppHandle, state: &BleState) -> Result<Perip
         .ok_or_else(|| "the connected device is no longer available".to_string())
 }
 
-/// Subscribes to wifi_state and forwards notifications to the frontend.
+/// Subscribes to everything the monocle notifies on, and routes it.
 ///
-/// A device without the characteristic connects normally and simply never
-/// reports, which keeps `ble_connect` usable against firmware that predates
-/// this service. That is now only older minicole builds: since scans filter on
-/// the service UUID, anything not advertising it never reaches this point.
-async fn watch_wifi_state(app: &AppHandle, peripheral: &Peripheral) {
-    let Some(characteristic) = find_characteristic(peripheral, WIFI_STATE_CHR_UUID) else {
-        return;
-    };
-
-    if let Err(err) = peripheral.subscribe(&characteristic).await {
-        eprintln!("ble: could not subscribe to wifi_state: {err}");
-        return;
+/// One stream, dispatched by characteristic. btleplug delivers every
+/// notification from a peripheral on the same stream, so a watcher per
+/// characteristic would mean several tasks each filtering out the others'
+/// traffic — and voice is 31 notifications a second to filter.
+///
+/// A device missing a characteristic subscribes to the rest and simply never
+/// reports it, which keeps `ble_connect` usable against older minicole builds.
+async fn watch_notifications(app: &AppHandle, peripheral: &Peripheral) {
+    for (name, uuid) in [
+        ("wifi_state", WIFI_STATE_CHR_UUID),
+        ("voice", VOICE_CHR_UUID),
+        ("status", STATUS_CHR_UUID),
+    ] {
+        let Some(characteristic) = find_characteristic(peripheral, uuid) else {
+            // Almost always a bonded Mac serving a cached GATT table that
+            // predates this characteristic — the symptom is the device
+            // working except for whatever the missing one carries.
+            eprintln!(
+                "ble: no {name} characteristic on this device; \
+                 forget it in System Settings if this is current firmware"
+            );
+            continue;
+        };
+        match peripheral.subscribe(&characteristic).await {
+            Ok(()) => eprintln!("ble: subscribed to {name}"),
+            Err(err) => eprintln!("ble: could not subscribe to {name}: {err}"),
+        }
     }
 
     let mut notifications = match peripheral.notifications().await {
@@ -307,15 +316,26 @@ async fn watch_wifi_state(app: &AppHandle, peripheral: &Peripheral) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let mut session = crate::voice::Session::new();
+
         // Ends on its own when the peripheral disconnects.
         while let Some(notification) = notifications.next().await {
-            if notification.uuid != WIFI_STATE_CHR_UUID {
-                continue;
-            }
-            if let Some(event) = parse_wifi_state(&notification.value) {
-                let _ = app.emit(WIFI_EVENT, event);
+            match notification.uuid {
+                WIFI_STATE_CHR_UUID => {
+                    if let Some(event) = parse_wifi_state(&notification.value) {
+                        let _ = app.emit(WIFI_EVENT, event);
+                    }
+                }
+                STATUS_CHR_UUID => session.on_status(&app, &notification.value),
+                VOICE_CHR_UUID => session.on_frame(&notification.value),
+                _ => {}
             }
         }
+
+        // The link dropped. Anything half-captured is abandoned rather than
+        // transcribed: a truncated utterance would arrive as a confident
+        // fragment of a sentence.
+        session.abandon(&app);
     });
 }
 
@@ -498,7 +518,7 @@ pub async fn ble_connect(
         .await
         .map_err(|err| format!("connected, but service discovery failed: {err}"))?;
 
-    watch_wifi_state(&app, &peripheral).await;
+    watch_notifications(&app, &peripheral).await;
     greet_display(&peripheral).await;
 
     let name = peripheral

@@ -15,7 +15,7 @@ import {
   type DownloadState,
   type LocalModel,
 } from "@/hooks/use-models"
-import { chatModels, type ModelEntry } from "@/lib/model-manifest"
+import { chatModels, sttModel, type ModelEntry } from "@/lib/model-manifest"
 import { CheckIcon, Trash2Icon, XIcon } from "lucide-react"
 
 function formatGb(bytes: number) {
@@ -36,6 +36,7 @@ export function ModelsView() {
     setActive,
   } = useModels()
 
+  const speechModel = manifest ? sttModel(manifest) : undefined
   const manifestIds = new Set(manifest?.models.map((entry) => entry.id) ?? [])
   const manifestFiles = new Set(
     manifest?.models.map((entry) => entry.file) ?? []
@@ -119,6 +120,30 @@ export function ModelsView() {
             onActivate={() => setActive(entry.file)}
           />
         ))}
+
+        {speechModel && (
+          <>
+            <div className="mt-2">
+              <h2 className="text-sm font-medium">Speech</h2>
+              <p className="text-sm text-muted-foreground">
+                Needed to talk to the monocle. Without it, speaking is captured
+                but never transcribed.
+              </p>
+            </div>
+            <ModelCard
+              entry={speechModel}
+              local={locals.find((local) => local.file === speechModel.file)}
+              downloadState={downloads[speechModel.id]}
+              // There is only one speech model and it is used whenever you
+              // speak, so there is nothing to activate.
+              isActive={false}
+              selectable={false}
+              onDownload={() => download(speechModel.id)}
+              onCancel={() => cancel(speechModel.id)}
+              onDelete={() => remove(speechModel.file)}
+            />
+          </>
+        )}
       </div>
     </div>
   )
@@ -232,6 +257,7 @@ function ModelCard({
   onCancel,
   onDelete,
   onActivate,
+  selectable = true,
 }: {
   entry: ModelEntry
   local?: LocalModel
@@ -240,7 +266,14 @@ function ModelCard({
   onDownload: () => void
   onCancel: () => void
   onDelete: () => void
-  onActivate: () => void
+  onActivate?: () => void
+  /**
+   * Whether this model is something to switch to. False for the speech
+   * model: it is used whenever you talk to the monocle, so "Use" would imply
+   * a choice that does not exist. It still downloads and deletes like any
+   * other, which is the point of sharing this card.
+   */
+  selectable?: boolean
 }) {
   const downloading = downloadState?.status === "downloading"
   const downloaded = Boolean(local && !local.partial)
@@ -251,9 +284,14 @@ function ModelCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           {entry.name}
-          {isActive && (
+          {selectable && isActive && (
             <span className="rounded-full bg-primary px-2 py-0.5 font-sans text-[10px] font-semibold tracking-normal text-primary-foreground">
               Active
+            </span>
+          )}
+          {!selectable && downloaded && (
+            <span className="rounded-full bg-muted px-2 py-0.5 font-sans text-[10px] font-semibold tracking-normal text-muted-foreground">
+              Downloaded
             </span>
           )}
         </CardTitle>
@@ -266,7 +304,7 @@ function ModelCard({
             </Button>
           ) : downloaded ? (
             <>
-              {!isActive && (
+              {selectable && !isActive && (
                 <Button variant="outline" size="xs" onClick={onActivate}>
                   <CheckIcon data-icon="inline-start" />
                   Use

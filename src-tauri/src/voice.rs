@@ -162,33 +162,267 @@ impl Utterance {
         self.samples.len() as f32 / SAMPLE_RATE as f32
     }
 
-    /// Encodes the utterance as a 16-bit mono WAV.
+    /// Loudness, with any DC offset removed.
     ///
-    /// A container rather than raw PCM because that is what whisper.cpp's
-    /// server accepts, and because a file with a header is one someone can
-    /// double-click when a transcript comes back wrong.
+    /// Worth having because whisper does not fail on audio without speech in
+    /// it — it *invents* text, confidently, usually song lyrics. So "did the
+    /// microphone actually hear a voice" is a question that has to be
+    /// answered before transcription, not after. Measured on this hardware:
+    /// a quiet room is ~120, room tone with movement ~330, someone speaking
+    /// at the board ~700.
+    pub fn rms(&self) -> f32 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        let mean = self.samples.iter().map(|s| *s as f64).sum::<f64>()
+            / self.samples.len() as f64;
+        let sum_squares: f64 = self
+            .samples
+            .iter()
+            .map(|s| {
+                let centred = *s as f64 - mean;
+                centred * centred
+            })
+            .sum();
+        (sum_squares / self.samples.len() as f64).sqrt() as f32
+    }
+
+    /// Encodes the utterance as a 16-bit mono WAV.
     pub fn to_wav(&self) -> Vec<u8> {
-        let data_len = (self.samples.len() * 2) as u32;
-        let mut wav = Vec::with_capacity(44 + data_len as usize);
+        wav_from_pcm(&self.samples, SAMPLE_RATE)
+    }
+}
 
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes()); // PCM chunk size
-        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM, uncompressed
-        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
-        wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-        wav.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes()); // byte rate
-        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
-        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_len.to_le_bytes());
+/// Wraps 16-bit mono PCM in a WAV container.
+///
+/// A container rather than raw PCM because that is what whisper.cpp's server
+/// accepts, and because a file with a header is one someone can double-click
+/// when a transcript comes back wrong. Shared with the app's own recorder, so
+/// both routes to whisper hand it byte-identical input.
+pub fn wav_from_pcm(samples: &[i16], sample_rate: u32) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
 
-        for sample in &self.samples {
-            wav.extend_from_slice(&sample.to_le_bytes());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // PCM chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM, uncompressed
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+
+    for sample in samples {
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    wav
+}
+
+// ---------------------------------------------------------------------------
+// Session: status events and frames in, transcripts out
+// ---------------------------------------------------------------------------
+
+/// The event name the frontend listens on.
+pub const VOICE_EVENT: &str = "voice-session";
+
+/// status events, mirroring `enum monocle_status_event` in the firmware's
+/// bleprph.h and docs/protocol.md.
+const STATUS_VOICE_STARTED: u8 = 1;
+const STATUS_VOICE_ENDED: u8 = 2;
+const STATUS_PANEL_GEOMETRY: u8 = 3;
+
+/// Utterances shorter than this are not sent for transcription.
+///
+/// A wake word followed immediately by silence is someone testing the device,
+/// or a false trigger. Transcribing it wastes a second and, worse, files a
+/// session containing whatever whisper hallucinates from noise.
+const MIN_UTTERANCE_SECS: f32 = 0.4;
+
+/// What the app tells the frontend about a voice session.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceEvent {
+    /// "listening" | "transcribing" | "transcript" | "ended" | "error"
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+fn emit(app: &tauri::AppHandle, kind: &'static str, text: Option<String>, message: Option<String>) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        VOICE_EVENT,
+        VoiceEvent {
+            kind,
+            text,
+            message,
+        },
+    );
+}
+
+/// Assembles one utterance at a time from the notification stream.
+///
+/// Deliberately a plain state machine rather than a task: it is driven by the
+/// notification pump in `ble.rs` and owns no I/O, so the interesting
+/// transitions are testable without Bluetooth.
+pub struct Session {
+    current: Option<Utterance>,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Session {
+    pub fn new() -> Self {
+        Session { current: None }
+    }
+
+    /// Whether an utterance is being captured right now.
+    pub fn is_capturing(&self) -> bool {
+        self.current.is_some()
+    }
+
+    /// Handles one status notification.
+    pub fn on_status(&mut self, app: &tauri::AppHandle, payload: &[u8]) {
+        let Some((&event, extra)) = payload.split_first() else {
+            return;
+        };
+
+        match event {
+            STATUS_VOICE_STARTED => {
+                println!("voice: utterance started");
+                self.current = Some(Utterance::new());
+                emit(app, "listening", None, None);
+            }
+            STATUS_VOICE_ENDED => {
+                let reason = extra.first().copied().unwrap_or(0);
+                if let Some(utterance) = self.current.as_ref() {
+                    println!(
+                        "voice: utterance ended (reason {reason}), {:.1}s, rms {:.0}{}",
+                        utterance.duration_secs(),
+                        utterance.rms(),
+                        if utterance.rms() < 400.0 {
+                            " — quiet; whisper invents text when it hears no speech"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                self.finish(app, reason);
+            }
+            STATUS_PANEL_GEOMETRY => {
+                // Not used yet: wrapping and pagination both live in the
+                // firmware. Recorded because the panel is a stand-in for a
+                // micro-LED with different dimensions. See docs/protocol.md.
+                if let [cols, rows] = extra {
+                    println!("ble: panel is {cols}x{rows} characters");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handles one voice frame. Frames outside an utterance are ignored —
+    /// they would be audio nobody asked for.
+    pub fn on_frame(&mut self, payload: &[u8]) {
+        let Some(utterance) = self.current.as_mut() else {
+            return;
+        };
+        match decode_frame(payload) {
+            Ok(frame) => utterance.push(frame),
+            // One bad frame is a hole, not a reason to lose the sentence.
+            Err(err) => eprintln!("ble: dropped a voice frame: {err}"),
+        }
+    }
+
+    /// Drops a half-captured utterance, e.g. because the link went away.
+    pub fn abandon(&mut self, app: &tauri::AppHandle) {
+        if self.current.take().is_some() {
+            emit(app, "ended", None, None);
+        }
+    }
+
+    /// Ends the utterance and starts transcription.
+    fn finish(&mut self, app: &tauri::AppHandle, reason: u8) {
+        let Some(utterance) = self.current.take() else {
+            return;
+        };
+
+        // 2 is the firmware's "capture error" — the audio is not trustworthy.
+        if reason == 2 {
+            emit(app, "error", None, Some("The monocle's microphone failed mid-sentence.".into()));
+            return;
         }
 
-        wav
+        if utterance.is_empty() || utterance.duration_secs() < MIN_UTTERANCE_SECS {
+            emit(app, "ended", None, None);
+            return;
+        }
+
+        if utterance.dropped() > 0 {
+            eprintln!(
+                "ble: {} of {:.1}s of audio never arrived",
+                utterance.dropped(),
+                utterance.duration_secs()
+            );
+        }
+
+        emit(app, "transcribing", None, None);
+
+        let wav = utterance.to_wav();
+
+        // Debug builds keep a copy of exactly what whisper was given. When a
+        // transcript comes back empty or wrong, the only way to tell a bad
+        // recording from a bad transcription is to listen to the audio — and
+        // it is otherwise never written down anywhere.
+        #[cfg(debug_assertions)]
+        {
+            let path = std::env::temp_dir().join(format!(
+                "minicole-utterance-{}.wav",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            ));
+            match std::fs::write(&path, &wav) {
+                Ok(()) => println!("voice: wrote {} for inspection", path.display()),
+                Err(err) => eprintln!("voice: could not save the utterance: {err}"),
+            }
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            match crate::whisper::transcribe(&app, wav).await {
+                Ok(text) if text.is_empty() => {
+                    // Whisper heard nothing it could turn into words. Ending
+                    // quietly beats filing an empty session — but say so on
+                    // the console, because from the outside this is
+                    // indistinguishable from the app ignoring you.
+                    println!("voice: whisper returned an empty transcript");
+                    emit(&app, "ended", None, None);
+                }
+                Ok(text) => {
+                    println!("voice: transcript {text:?}");
+                    emit(&app, "transcript", Some(text), None)
+                }
+                Err(err) => {
+                    // Also to the console: this is the step most likely to
+                    // fail (missing model, sidecar not built) and the message
+                    // says exactly which.
+                    eprintln!("voice: transcription failed: {err}");
+                    emit(&app, "error", None, Some(err))
+                }
+            }
+        });
     }
 }
 

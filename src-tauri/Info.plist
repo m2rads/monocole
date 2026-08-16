@@ -4,5 +4,7 @@
 <dict>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>Minicole uses Bluetooth to connect to your smart monocle.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Minicole uses your Mac's microphone so you can dictate a message without the monocle.</string>
 </dict>
 </plist>

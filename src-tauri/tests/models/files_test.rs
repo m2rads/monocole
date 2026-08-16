@@ -40,6 +40,33 @@ fn invalid_file_names_fail() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn scan_lists_speech_models_too() {
+    // Whisper's model is .bin and shares this directory. If the scan skipped
+    // it, a downloaded speech model would look absent and its card would
+    // offer to download it again forever.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ggml-base.en.bin"), [0u8; 11]).unwrap();
+    std::fs::write(dir.path().join("ggml-small.en.bin.part"), [0u8; 4]).unwrap();
+
+    let models = scan_models_dir(dir.path()).unwrap();
+    assert_eq!(
+        models,
+        vec![
+            LocalModel {
+                file: "ggml-base.en.bin".into(),
+                size_bytes: 11,
+                partial: false
+            },
+            LocalModel {
+                file: "ggml-small.en.bin".into(),
+                size_bytes: 4,
+                partial: true
+            },
+        ]
+    );
+}
+
+#[test]
 fn scan_lists_finals_and_partials() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a.gguf"), [0u8; 5]).unwrap();

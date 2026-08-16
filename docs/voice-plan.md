@@ -278,7 +278,26 @@ Gate: a pytest subscribes, a human speaks a sentence, the Python decoder from
 phase 2 turns the captured frames into a WAV, and it is intelligible. Assert no
 sequence gaps at ≥64 kbps in the same run.
 
-## Phase 6 — app side: receive and transcribe
+## Phase 6 — app side: receive and transcribe — **built, 2026-08-15**
+
+Done: the notification pump, `voice.rs` (decoder, utterance assembly, session
+state machine), `whisper.rs`, and the model in the catalog. 95 Rust tests.
+
+Two things worth carrying forward:
+
+- **The Rust decoder is cross-checked against the Python encoder**, using a
+  fixture in `src-tauri/tests/fixtures/`. Two decoders both written by the same
+  hand from the same spec prove nothing; the Python side is the one the
+  hardware capture already validated, so agreeing with it means something.
+- **whisper.cpp has no macOS binary**, so `scripts/fetch-whisper-server.sh`
+  builds from source. Verified: 3.5 MB arm64 binary with Metal, and its
+  `--model/--host/--port` and `/inference` match what `whisper.rs` sends.
+
+**Neither sidecar is bundled.** `tauri.conf.json` has `resources: []`, so a
+packaged build finds neither llama-server nor whisper-server. That predates
+this work and is one shared task — see TODO(packaging) in both files.
+
+### The original plan for this phase
 
 **Refactor `ble.rs` to one notification pump.** `watch_wifi_state` currently
 opens its own `peripheral.notifications()` stream; three subscribers doing that
@@ -305,7 +324,25 @@ Rust then emits a `voice-session` event:
 already, so the frontend needs one new listener rather than a second view of
 connection state.
 
-## Phase 7 — app side: sessions and what the user sees
+## Phase 7 — app side: sessions and what the user sees — **built, 2026-08-15**
+
+Built as designed: lazy session creation, the shared `startStream` path, the
+listening/transcribing bubble, and the connect/disconnect boundary. 11 vitest
+cases cover the transitions that matter — including that a false trigger
+leaves *no trace*, and that a failed utterance does not take an existing
+session down with it.
+
+Not built, and deliberately: **the transcript is not shown on the panel.**
+`monocle.rs` puts its thinking indicator up the moment generation starts, so a
+transcript would flash for a few hundred milliseconds and read as a glitch.
+Confirming what the device heard is still worth doing; it needs to be part of
+the panel's eventual UI rather than bolted in front of the existing mirror.
+
+Also not built: a mic glyph distinguishing voice sessions in the history. It
+needs a flag on `Session` recording where the turn came from, which is more
+state than the cue is currently worth.
+
+### The original plan for this phase
 
 Extract the turn-taking core out of `sendMessage` in `use-sessions.tsx` so the
 composer and voice share one path, then:
