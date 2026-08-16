@@ -27,6 +27,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "esp_log.h"
 #include "nvs.h"
+#include "adpcm.h"
 #include "display.h"
 
 
@@ -642,6 +643,51 @@ gatt_svr_notify_wifi_state(uint8_t state, const void *extra, uint8_t extra_len)
                                  gatt_svr_chr_wifi_state_handle, om);
     if (rc != 0) {
         ESP_LOGW(TAG, "wifi_state notify failed; rc=%d", rc);
+    }
+}
+
+void
+gatt_svr_notify_voice(uint16_t seq, int16_t predictor, uint8_t step_index,
+                      const uint8_t *payload, size_t payload_len)
+{
+    uint8_t frame[MONOCLE_VOICE_HEADER_LEN + ADPCM_FRAME_BYTES];
+    struct os_mbuf *om;
+    int rc;
+
+    if (gatt_svr_conn_handle == BLE_HS_CONN_HANDLE_NONE ||
+        !gatt_svr_voice_subscribed) {
+        return;
+    }
+
+    if (payload_len > ADPCM_FRAME_BYTES) {
+        ESP_LOGE(TAG, "voice payload too long (%u)", (unsigned)payload_len);
+        return;
+    }
+
+    /* [seq u16][predictor i16][step_index u8], little-endian — the state this
+     * frame starts from, so the app can decode it without the ones before it.
+     * Written byte by byte rather than by struct copy, because the wire format
+     * must not inherit the compiler's padding or alignment. */
+    frame[0] = (uint8_t)(seq & 0xff);
+    frame[1] = (uint8_t)(seq >> 8);
+    frame[2] = (uint8_t)((uint16_t)predictor & 0xff);
+    frame[3] = (uint8_t)((uint16_t)predictor >> 8);
+    frame[4] = step_index;
+    memcpy(&frame[MONOCLE_VOICE_HEADER_LEN], payload, payload_len);
+
+    /* ble_gatts_notify_custom consumes the mbuf, including on failure. */
+    om = ble_hs_mbuf_from_flat(frame, MONOCLE_VOICE_HEADER_LEN + payload_len);
+    if (om == NULL) {
+        /* Dropping a frame is the right response to running out of mbufs: the
+         * app inserts silence for the gap, whereas blocking the audio task
+         * here would put the whole utterance behind real time. */
+        return;
+    }
+
+    rc = ble_gatts_notify_custom(gatt_svr_conn_handle,
+                                 gatt_svr_chr_voice_handle, om);
+    if (rc != 0) {
+        ESP_LOGD(TAG, "voice notify failed; rc=%d", rc);
     }
 }
 

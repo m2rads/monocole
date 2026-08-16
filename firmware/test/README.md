@@ -117,3 +117,16 @@ audio that is recognisable but wrong.
 - **Coexistence throughput.** BLE and Wi-Fi sharing one antenna under sustained
   load is milestone 3/4 work; there is nothing to measure until voice or the
   socket exists.
+- **The wake word.** Nothing here can say it. Check by hand with `idf.py
+  monitor`: say "Jarvis" or "Hi ESP" and look for `wake word detected`, then
+  `utterance ended (silence)` about 800 ms after you stop. The panel should
+  read `listening` in between and return to its resting text afterwards, never
+  blank.
+- **False triggers.** The one that needs patience: leave it running for half an
+  hour of normal life — conversation, a television — and count how often
+  `wake word detected` appears without anyone addressing it. Two models are
+  loaded, so the exposure is roughly double that of one.
+- **Microphone audio.** `capture_mic.py` writes a WAV and can tell a dead or
+  stuck mic from a live one, but not good audio from bad. Listen to it. Needs a
+  build with `CONFIG_MONOCLE_MIC_DUMP_AT_BOOT=y`, and no `idf.py monitor`
+  holding the port.

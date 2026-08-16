@@ -223,18 +223,50 @@ console-heavy debug tool:
 - **Only one process can read the port.** An open `idf.py monitor` swallows the
   dump and the script sees a port that reports data and returns none.
 
-## Phase 4 — AFE and the wake word
+## Phase 4 — AFE and the wake word — **done, 2026-08-15**
 
 I2S feeds AFE; the detector and, later, the encoder both read what AFE
 produces, rather than the encoder reading raw I2S. **AFE's feed chunk is 512
 samples — 32 ms at 16 kHz, one channel** (measured, phase 1a), which is exactly
 one voice frame. One chunk in, one notification out, no regrouping anywhere.
 
-On detection: `status` voice_started, and the panel shows `listening`. On
-~800 ms of VAD silence or the 15 s cap: `status` voice_ended with a reason.
+`main/voice.c` holds the front end and two tasks: feed shuttles mic samples in,
+fetch reads processed audio and runs the session state machine. On detection:
+`status` voice_started, panel shows `listening`. On 800 ms of VAD silence or
+the 15 s cap: `status` voice_ended with a reason, and the panel returns to its
+resting state rather than blanking — a screen going dark half a second after
+you speak reads as the device ignoring you.
 
-Gate: sit in a normal room for 30 minutes and count false triggers. An
-always-listening mic that fires at the television is worse than a button.
+Verified on hardware: detection works, and 60 s of silence produced no false
+triggers and no watchdog.
+
+### Two wake words, and why
+
+**"Jarvis" and "Hi ESP" are both loaded**; either wakes the device, and
+`wakenet_model_index` tells them apart. Two models cost ~568 KB, which is why
+`model` grew from 512 K to 1 M — it is last in the partition table, so growing
+it moved nothing else and cost neither the bond nor the stored network.
+
+The reason for two is a property worth knowing before picking any wake word:
+**`_tts` models are trained on synthesized speech, not real recordings.** Of
+the English set only "Hi ESP" and "Alexa" use real data. Jarvis is
+`wn9_jarvis_tts`, and it shows — it needs repeating where Hi ESP worked first
+try. Lowering its threshold to 0.50 helped somewhat but trades directly against
+false triggers, and the threshold now sits back at the model default. So Jarvis
+is the nice trigger to say and Hi ESP is the one that always works.
+
+`voice_tune_thresholds()` applies any lowering **only to `_tts` models** — the
+real-data ones do not need help, and lowering them would buy nothing but false
+triggers.
+
+### Still open
+
+- **The false-trigger soak.** Sixty seconds of silence proves nothing about a
+  room with a television in it. The gate is 30 minutes of normal life, and two
+  detectors running at once roughly doubles the exposure.
+- **Power.** This is the first build where a mic and a neural net run
+  continuously. The consequence was accepted up front in the decisions above;
+  it has still never been measured.
 
 ## Phase 5 — encode and stream
 

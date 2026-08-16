@@ -19,6 +19,7 @@
 #define H_BLEPRPH_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include "nimble/ble.h"
 #include "host/ble_uuid.h"
 #include "modlog/modlog.h"
@@ -103,6 +104,17 @@ void gatt_svr_on_disconnect(void);
 /* Sends one status event. Silently does nothing when nobody is subscribed,
  * which is the normal case for most of a session. */
 void gatt_svr_notify_status(uint8_t event, const void *extra, uint8_t extra_len);
+
+/* Bytes of frame header before the ADPCM payload: seq, predictor, step index.
+ * See docs/protocol.md. */
+#define MONOCLE_VOICE_HEADER_LEN              5
+
+/* Sends one voice frame. `predictor` and `step_index` are the encoder state as
+ * it was *before* this frame's samples, which is what makes the frame
+ * decodable on its own. Drops the frame rather than blocking if nobody is
+ * subscribed or the stack is out of buffers. */
+void gatt_svr_notify_voice(uint16_t seq, int16_t predictor, uint8_t step_index,
+                           const uint8_t *payload, size_t payload_len);
 
 /* Whether anyone is listening for voice frames. The capture path checks this
  * before encoding, since ADPCM for an empty room is wasted CPU. */

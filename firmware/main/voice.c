@@ -12,6 +12,7 @@
 #include "esp_wn_models.h"
 #include "model_path.h"
 
+#include "adpcm.h"
 #include "bleprph.h"
 #include "display.h"
 #include "mic.h"
@@ -57,7 +58,7 @@ static const char *TAG = "monocle_voice";
  *
  * Set to 0 to leave every model alone.
  */
-#define VOICE_TTS_THRESHOLD     0.63f
+#define VOICE_TTS_THRESHOLD     0.5f
 
 static esp_afe_sr_data_t *s_afe_data;
 static const esp_afe_sr_iface_t *s_afe;
@@ -65,6 +66,12 @@ static volatile bool s_listening;
 
 /* Set once at init: how many samples one feed() wants. */
 static int s_feed_samples;
+
+/* Streaming state, touched only by the fetch task. */
+static adpcm_state_t s_adpcm;
+static int16_t s_pcm[ADPCM_FRAME_SAMPLES];
+static int s_pcm_used;
+static uint16_t s_seq;
 
 bool
 voice_is_listening(void)
@@ -102,10 +109,54 @@ voice_feed_task(void *arg)
     }
 }
 
+/*
+ * Encodes what the front end produced and puts it on the air.
+ *
+ * Frames are a fixed 512 samples on the wire, but nothing guarantees a fetch
+ * hands back exactly that many, so samples accumulate here and go out a full
+ * frame at a time. The leftovers of one fetch start the next frame.
+ *
+ * Encoder state runs continuously across the utterance; each frame's header
+ * records where it started, taken *before* encoding. That is what makes a
+ * frame decodable alone, and why a dropped notification costs only its own
+ * 32 ms instead of the rest of the sentence.
+ */
+static void
+voice_stream(const int16_t *samples, int count)
+{
+    if (!gatt_svr_voice_is_subscribed()) {
+        /* Nobody is listening, so encoding would be wasted CPU on a device
+         * that is already running a neural net continuously. */
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        s_pcm[s_pcm_used++] = samples[i];
+        if (s_pcm_used < ADPCM_FRAME_SAMPLES) {
+            continue;
+        }
+
+        int16_t predictor = s_adpcm.predictor;
+        uint8_t step_index = s_adpcm.step_index;
+        uint8_t payload[ADPCM_FRAME_BYTES];
+
+        adpcm_encode(&s_adpcm, s_pcm, ADPCM_FRAME_SAMPLES, payload);
+        gatt_svr_notify_voice(s_seq++, predictor, step_index,
+                              payload, sizeof payload);
+        s_pcm_used = 0;
+    }
+}
+
 static void
 voice_start_utterance(const afe_fetch_result_t *result)
 {
     s_listening = true;
+
+    /* A fresh utterance starts the numbering and the codec over, so the app
+     * can tell one from the next without being told where the boundary is. */
+    s_seq = 0;
+    s_pcm_used = 0;
+    adpcm_reset(&s_adpcm);
 
     ESP_LOGI(TAG, "wake word detected (index %d, %.1f dB)",
              result->wake_word_index, result->data_volume);
@@ -174,9 +225,8 @@ voice_fetch_task(void *arg)
             continue;
         }
 
-        /* TODO(voice-stream): this is where the encoder goes. result->data is
-         * the processed audio for this frame — 512 samples of it, which is
-         * exactly one ADPCM frame on the wire. See docs/protocol.md. */
+        voice_stream(result->data,
+                     result->data_size / (int)sizeof(int16_t));
 
         elapsed_ms += frame_ms;
         silence_ms = (result->vad_state == VAD_SPEECH) ? 0
