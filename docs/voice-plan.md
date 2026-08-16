@@ -251,9 +251,10 @@ The reason for two is a property worth knowing before picking any wake word:
 **`_tts` models are trained on synthesized speech, not real recordings.** Of
 the English set only "Hi ESP" and "Alexa" use real data. Jarvis is
 `wn9_jarvis_tts`, and it shows — it needs repeating where Hi ESP worked first
-try. Lowering its threshold to 0.50 helped somewhat but trades directly against
-false triggers, and the threshold now sits back at the model default. So Jarvis
-is the nice trigger to say and Hi ESP is the one that always works.
+try. Its threshold is lowered to 0.50 from the shipped ~0.63, which helps but
+trades directly against false triggers. So Jarvis is the nice trigger to say
+and Hi ESP is the one that always works; `VOICE_TTS_THRESHOLD` in `voice.c` is
+the knob if false triggers become the bigger annoyance.
 
 `voice_tune_thresholds()` applies any lowering **only to `_tts` models** — the
 real-data ones do not need help, and lowering them would buy nothing but false

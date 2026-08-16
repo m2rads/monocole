@@ -117,6 +117,9 @@ pub async fn download_model_from_url(
 ) -> Result<(), String> {
     let file = file_name_from_url(&url)?;
     let entry = ModelEntry {
+        // A pasted URL is always a chat model: the speech model is fetched
+        // from the catalog, never typed in by hand.
+        kind: crate::manifest::ModelKind::Chat,
         id: file.clone(),
         name: file.clone(),
         description: String::new(),

@@ -17,7 +17,7 @@ pub(crate) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|err| err.to_string())
 }
 
-pub(crate) fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app_data_dir(app)?.join("models");
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     Ok(dir)

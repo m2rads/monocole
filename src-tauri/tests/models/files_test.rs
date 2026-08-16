@@ -14,18 +14,22 @@ use super::*;
 fn valid_file_names_pass() {
     assert!(validate_file_name("model.gguf").is_ok());
     assert!(validate_file_name("Llama-3.2-3B-Instruct-Q4_K_M.gguf").is_ok());
+    // Whisper's GGML speech models are .bin, and go in the same directory
+    // through the same downloader.
+    assert!(validate_file_name("ggml-base.en.bin").is_ok());
 }
 
 #[test]
 fn invalid_file_names_fail() {
     for name in [
         "",
-        "model.bin",
+        "model.txt",
         "model.gguf.part",
         ".hidden.gguf",
         "../escape.gguf",
+        "../escape.bin",
         "dir/model.gguf",
-        "dir\\model.gguf",
+        "dir\\model.bin",
     ] {
         assert!(validate_file_name(name).is_err(), "should reject {name:?}");
     }

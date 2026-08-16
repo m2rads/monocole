@@ -56,9 +56,14 @@ static const char *TAG = "monocle_voice";
  * data. Those keep their shipped default, because they do not need the help
  * and lowering them would only buy false triggers.
  *
- * Set to 0 to leave every model alone.
+ * Set to 0 to leave every model alone — which is where it sits now. 0.50 was
+ * tried on hardware and made the device wake on ordinary conversation, which
+ * is far worse than having to repeat yourself: every false trigger opens a
+ * session, and once the app turns sessions into history it also files a
+ * transcript of whatever was being said at the time. The shipped defaults are
+ * the better trade, with Hi ESP as the word that reliably works.
  */
-#define VOICE_TTS_THRESHOLD     0.5f
+#define VOICE_TTS_THRESHOLD     0.0f
 
 static esp_afe_sr_data_t *s_afe_data;
 static const esp_afe_sr_iface_t *s_afe;
@@ -158,8 +163,12 @@ voice_start_utterance(const afe_fetch_result_t *result)
     s_pcm_used = 0;
     adpcm_reset(&s_adpcm);
 
-    ESP_LOGI(TAG, "wake word detected (index %d, %.1f dB)",
-             result->wake_word_index, result->data_volume);
+    /* wakenet_model_index says *which wake word* fired, which is the number
+     * that matters when one of them is triggering on ordinary speech;
+     * wake_word_index only distinguishes words within a single model. */
+    ESP_LOGI(TAG, "wake word detected (model %d, word %d, %.1f dB)",
+             result->wakenet_model_index, result->wake_word_index,
+             result->data_volume);
 
     /* The wearer needs to know it heard them before the reply exists —
      * inference takes seconds and a blank panel is indistinguishable from a

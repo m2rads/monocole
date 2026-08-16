@@ -18,12 +18,19 @@ pub struct LocalModel {
 }
 
 /// Model files are always addressed by bare file name inside models_dir.
+/// Model file names become paths inside the models dir, so this is a safety
+/// check before any of them is opened, written or deleted.
+///
+/// The extension allow-list is part of that: `.gguf` for chat models,
+/// `.bin` for whisper's GGML speech models. Anything else is either a mistake
+/// or an attempt to make the app write somewhere it should not.
 pub(crate) fn validate_file_name(file: &str) -> Result<(), String> {
+    let known_extension = file.ends_with(".gguf") || file.ends_with(".bin");
     if file.is_empty()
         || file.starts_with('.')
         || file.contains('/')
         || file.contains('\\')
-        || !file.ends_with(".gguf")
+        || !known_extension
     {
         return Err(format!("invalid model file name: {file}"));
     }

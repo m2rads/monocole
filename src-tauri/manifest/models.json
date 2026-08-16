@@ -28,7 +28,7 @@
     {
       "id": "gemma-3-4b-it-q4_k_m",
       "name": "Gemma 3 4B",
-      "description": "Google's small instruct model with vision support — a fit for monocle image input later.",
+      "description": "Google's small instruct model with vision support \u2014 a fit for monocle image input later.",
       "repo": "ggml-org/gemma-3-4b-it-GGUF",
       "file": "gemma-3-4b-it-Q4_K_M.gguf",
       "url": "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
@@ -47,6 +47,19 @@
       "quant": "Q4_K_M",
       "sizeBytes": 5027783680,
       "minRamGb": 16,
+      "sha256": null
+    },
+    {
+      "kind": "stt",
+      "id": "whisper-base-en",
+      "name": "Whisper Base (English)",
+      "description": "Speech-to-text for the monocle's microphone. Downloaded automatically the first time you speak to it; not selectable for chat.",
+      "repo": "ggerganov/whisper.cpp",
+      "file": "ggml-base.en.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+      "quant": "f16",
+      "sizeBytes": 147951465,
+      "minRamGb": 2,
       "sha256": null
     }
   ]

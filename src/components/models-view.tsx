@@ -15,7 +15,7 @@ import {
   type DownloadState,
   type LocalModel,
 } from "@/hooks/use-models"
-import type { ModelEntry } from "@/lib/model-manifest"
+import { chatModels, type ModelEntry } from "@/lib/model-manifest"
 import { CheckIcon, Trash2Icon, XIcon } from "lucide-react"
 
 function formatGb(bytes: number) {
@@ -102,7 +102,11 @@ export function ModelsView() {
             </p>
           </div>
         )}
-        {manifest?.models.map((entry) => (
+        {/* Chat models only. The speech model shares this catalog and its
+            downloader, but is not something to pick between — it stays in
+            `manifestIds`/`manifestFiles` above so its file is not mistaken
+            for a stray custom download. */}
+        {(manifest ? chatModels(manifest) : []).map((entry) => (
           <ModelCard
             key={entry.id}
             entry={entry}
