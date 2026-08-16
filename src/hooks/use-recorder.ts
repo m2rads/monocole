@@ -5,6 +5,15 @@ import { invoke } from "@tauri-apps/api/core"
 export type RecorderStatus = "idle" | "recording" | "transcribing"
 
 /**
+ * How long a failure stays on screen.
+ *
+ * It is a remark about the recording just made, not a condition to be
+ * acknowledged — long enough to read twice, and gone before it can be mistaken
+ * for something wrong with the next attempt.
+ */
+const ERROR_VISIBLE_MS = 5000
+
+/**
  * Records from the Mac's microphone and transcribes it with whisper.
  *
  * Capture happens in Rust, not here: WKWebView does not expose
@@ -31,6 +40,15 @@ export function useRecorder(onTranscript: (text: string) => void) {
     )
     return () => clearInterval(timer)
   }, [status])
+
+  // Retire a failure on its own. `start` clears the message before recording,
+  // so pressing the button again restarts the countdown rather than inheriting
+  // whatever was left of the last one.
+  React.useEffect(() => {
+    if (!error) return
+    const timer = setTimeout(() => setError(null), ERROR_VISIBLE_MS)
+    return () => clearTimeout(timer)
+  }, [error])
 
   const start = React.useCallback(async () => {
     setError(null)

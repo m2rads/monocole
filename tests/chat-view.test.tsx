@@ -1,11 +1,14 @@
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { ChatView } from "@/components/chat-view"
 import { SessionsProvider } from "@/hooks/use-sessions"
 
 import { emitTauriEvent, invokeCalls, invokeMock } from "./tauri-mocks"
+
+/** What the composer says when whisper heard no words. */
+const NO_SPEECH = "Couldn't capture anything, try speaking louder."
 
 function renderChat() {
   return render(
@@ -119,13 +122,33 @@ describe("ChatView", () => {
     await user.click(screen.getByLabelText("Dictate"))
     await user.click(await screen.findByLabelText("Stop dictating"))
 
-    expect(
-      await screen.findByText(
-        "Couldn't capture anything, try speaking louder."
-      )
-    ).toBeInTheDocument()
+    expect(await screen.findByText(NO_SPEECH)).toBeInTheDocument()
     // And nothing lands in the composer.
     expect(screen.getByPlaceholderText("How can I help you?")).toHaveValue("")
+  })
+
+  it("retires the failure notice on its own", async () => {
+    stubRecording("")
+    renderChat()
+
+    // fireEvent rather than userEvent: userEvent's own waiting has to be
+    // taught about a faked clock, and the clock is the thing under test here.
+    fireEvent.click(screen.getByLabelText("Dictate"))
+    const stop = await screen.findByLabelText("Stop dictating")
+
+    // Faked before the failure, so the effect's timeout is one this test owns.
+    vi.useFakeTimers()
+    await act(async () => {
+      fireEvent.click(stop)
+    })
+    expect(screen.getByText(NO_SPEECH)).toBeInTheDocument()
+
+    // Still there a moment later — long enough to read, not a flash.
+    act(() => vi.advanceTimersByTime(4000))
+    expect(screen.getByText(NO_SPEECH)).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(1000))
+    expect(screen.queryByText(NO_SPEECH)).not.toBeInTheDocument()
   })
 
   it("renders stream errors inline", async () => {

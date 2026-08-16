@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest"
 
-import { beforeEach, vi } from "vitest"
+import { afterEach, beforeEach, vi } from "vitest"
 
 import { resetTauriMocks } from "./tauri-mocks"
 
@@ -25,4 +25,11 @@ Element.prototype.scrollTo = vi.fn()
 
 beforeEach(() => {
   resetTauriMocks()
+})
+
+// A test that fakes timers and then times out never reaches its own cleanup,
+// and every test after it inherits a clock that does not move. Restoring here
+// keeps one failure from becoming a file full of them.
+afterEach(() => {
+  vi.useRealTimers()
 })
