@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
 
-pub(crate) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|err| err.to_string())
 }
 
