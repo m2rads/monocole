@@ -38,13 +38,15 @@ Run the scanner:
 .venv/bin/python scan.py
 ```
 
-**The usual cause is that something else is already connected.** `bleprph`
+**The usual cause is that something else is already connected.** The firmware
 accepts one central and stops advertising while connected, so nRF Connect or
 the minicole app holding the link makes the chip invisible to these tests.
 Disconnect there first.
 
-Otherwise check the board is powered and flashed, and that the advertised name
-matches (`--device-name`, default `nimble-bleprph`).
+Otherwise check the board is powered and flashed. The suite finds the board by
+the service UUID it advertises, not by name — macOS caches a bonded
+peripheral's name and keeps reporting a stale one, which would silently strand
+the whole suite after a rename. `--device-name` is informational only.
 
 ## What is covered
 
@@ -70,9 +72,22 @@ matches (`--device-name`, default `nimble-bleprph`).
   characteristic also proves the Service Changed mechanism works: a bonded
   central with a stale cache would not see it at all.
 
-`protocol.py` and `display.py` are independent implementations of the wire
-formats. They are deliberately not shared with the firmware or the Rust app, so
-that a drift on either side fails a test instead of being mirrored into it.
+- **Voice and status** — both characteristics are present and notify-only, and
+  status reports the panel geometry as soon as anything subscribes. There is no
+  mic pipeline yet, so the voice test asserts that *nothing* arrives: a device
+  streaming junk from an uninitialised buffer fails there. It is written so it
+  keeps working once frames do arrive.
+- **The ADPCM codec** — round-trip SNR, and the property the 5-byte frame
+  header exists for: a frame decodes identically alone and in sequence, so a
+  dropped notification costs only its own 32 ms. One test specifically catches
+  an encoder that resets its state per frame, which is decodable but buzzes at
+  the frame rate.
+
+`protocol.py`, `display.py` and `adpcm.py` are independent implementations of
+the wire formats. They are deliberately not shared with the firmware or the
+Rust app, so that a drift on either side fails a test instead of being mirrored
+into it. That matters most for the codec, where a subtle disagreement produces
+audio that is recognisable but wrong.
 
 ## Not covered here
 
@@ -102,3 +117,16 @@ that a drift on either side fails a test instead of being mirrored into it.
 - **Coexistence throughput.** BLE and Wi-Fi sharing one antenna under sustained
   load is milestone 3/4 work; there is nothing to measure until voice or the
   socket exists.
+- **The wake word.** Nothing here can say it. Check by hand with `idf.py
+  monitor`: say "Jarvis" or "Hi ESP" and look for `wake word detected`, then
+  `utterance ended (silence)` about 800 ms after you stop. The panel should
+  read `listening` in between and return to its resting text afterwards, never
+  blank.
+- **False triggers.** The one that needs patience: leave it running for half an
+  hour of normal life — conversation, a television — and count how often
+  `wake word detected` appears without anyone addressing it. Two models are
+  loaded, so the exposure is roughly double that of one.
+- **Microphone audio.** `capture_mic.py` writes a WAV and can tell a dead or
+  stuck mic from a live one, but not good audio from bad. Listen to it. Needs a
+  build with `CONFIG_MONOCLE_MIC_DUMP_AT_BOOT=y`, and no `idf.py monitor`
+  holding the port.

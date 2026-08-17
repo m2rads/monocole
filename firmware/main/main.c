@@ -27,6 +27,8 @@
 #include "services/gap/ble_svc_gap.h"
 #include "bleprph.h"
 #include "display.h"
+#include "mic.h"
+#include "voice.h"
 
 /* WIFI */
 #include <stdlib.h>
@@ -415,7 +417,6 @@ void wifi_prov_request_join(const char *ssid, const char *pass)
 }
 
 void ble_store_config_init(void);
-
 /*
  * Connection parameters the voice path needs, in the units the spec uses:
  * intervals in 1.25 ms steps, the supervision timeout in 10 ms steps.
@@ -728,6 +729,9 @@ bleprph_on_sync(void)
     rc = ble_hs_util_ensure_addr(0);
     assert(rc == 0);
 
+    /* The GATT table has handles by now, which it did not during init. */
+    gatt_svr_on_sync();
+
     /* Prefer 2M for every connection from here on, rather than asking per
      * connection: a PHY request issued at connect time competes with the
      * central's own setup and with our interval request, and the link layer
@@ -786,7 +790,7 @@ app_main(void)
      * that might want to report a problem on it. A missing display is logged
      * and otherwise ignored — the rest of the device still works headless. */
     if (display_init() == ESP_OK) {
-        display_show("minicole\nconnect to app to continue");
+        display_show_idle(false);
     }
 
     /* Bring the radio up but stay unassociated: which network we join is the
@@ -859,5 +863,26 @@ app_main(void)
     } else {
         ESP_LOGI(TAG, "no stored or configured credentials; "
                       "write them to the wifi_creds characteristic");
+    }
+
+    /* Audio comes up last, so a failure in it cannot stop the rest of the
+     * device: a monocle that connects and shows text but cannot hear is worth
+     * more than one that does not boot. */
+    if (mic_init() != ESP_OK) {
+        ESP_LOGW(TAG, "no microphone; voice will not work");
+        return;
+    }
+
+#if CONFIG_MONOCLE_MIC_DUMP_AT_BOOT
+    /* Milestone 3's gate — see mic.h. Returns before the front end starts,
+     * because the dump and the feed task would otherwise both read the mic. */
+    vTaskDelay(pdMS_TO_TICKS(1500));   /* let the boot chatter clear first */
+    mic_dump_to_console(3.0f);
+    ESP_LOGW(TAG, "mic dump build: wake word detection is not running");
+    return;
+#endif
+
+    if (voice_init() != ESP_OK) {
+        ESP_LOGW(TAG, "wake word detection unavailable");
     }
 }

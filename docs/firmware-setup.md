@@ -140,7 +140,7 @@ in Espressif's READMEs, and you get `Could not open PORT`.
 
 ```bash
 idf.py build
-idf.py -p /dev/cu.usbmodem3101 flash monitor
+idf.py -p /dev/cu.usbmodem1101 flash monitor
 ```
 
 Exit the monitor with **Ctrl-]**.

@@ -33,8 +33,11 @@ enum display_op {
     DISPLAY_OP_APPEND = 2,   /* add to what is there; how tokens will stream */
 };
 
-/* Longest text one write can carry. An ATT write request holds MTU-3 bytes of
- * value (253 at the 256 macOS negotiates), and the op byte is one of them. */
+/* Longest text one write can carry — this buffer, not the link. An ATT write
+ * holds MTU-3 bytes of value, which at the negotiated MTU of 512 is 509. This
+ * limit dates from NimBLE's old default MTU of 256 and stayed put when the MTU
+ * was raised, so it leaves headroom. Mirrored by DISPLAY_TEXT_MAX in
+ * src-tauri/src/ble.rs. */
 #define DISPLAY_TEXT_MAX    252
 
 /* Brings up I2C and the panel, and starts the render task. Call once, at
@@ -56,6 +59,14 @@ bool display_post(uint8_t op, const char *text, size_t len);
 
 /* Convenience wrapper for a NUL-terminated replacement. */
 void display_show(const char *text);
+
+/* Shows the panel's resting state: what it displays when nothing else is
+ * happening. Defined here so boot, disconnect and the end of a voice session
+ * all say the same words instead of each inventing their own.
+ *
+ * `app_connected` picks between waiting for the app and being ready for it. A
+ * placeholder until the panel grows a real UI. */
+void display_show_idle(bool app_connected);
 
 /* Blanks the panel. */
 void display_clear(void);

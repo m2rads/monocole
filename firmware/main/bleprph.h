@@ -19,6 +19,7 @@
 #define H_BLEPRPH_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include "nimble/ble.h"
 #include "host/ble_uuid.h"
 #include "modlog/modlog.h"
@@ -54,7 +55,25 @@ struct ble_gatt_register_ctxt;
  *
  * Forgetting to bump it looks exactly like a bug in whatever you just added.
  */
-#define MONOCLE_GATT_VERSION                  3
+#define MONOCLE_GATT_VERSION                  4
+
+/* Events reported over the status characteristic. Keep in sync with
+ * StatusEvent in src-tauri/src/ble.rs and docs/protocol.md.
+ *
+ * The trigger that starts a voice session stays off the wire deliberately —
+ * only the event crosses, so the wake word can change without the app caring.
+ */
+enum monocle_status_event {
+    MONOCLE_STATUS_VOICE_STARTED   = 1,  /* no extra */
+    MONOCLE_STATUS_VOICE_ENDED     = 2,  /* + 1 byte: monocle_voice_end_reason */
+    MONOCLE_STATUS_PANEL_GEOMETRY  = 3,  /* + 2 bytes: cols, rows */
+};
+
+enum monocle_voice_end_reason {
+    MONOCLE_VOICE_END_VAD    = 0,  /* the speaker stopped */
+    MONOCLE_VOICE_END_CAPPED = 1,  /* hit the maximum utterance length */
+    MONOCLE_VOICE_END_ERROR  = 2,  /* capture failed mid-utterance */
+};
 
 /* Values reported over the wifi_state characteristic. Keep in sync with
  * WifiState in src-tauri/src/ble.rs and docs/protocol.md. */
@@ -68,6 +87,12 @@ enum monocle_wifi_state {
 void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
 int gatt_svr_init(void);
 
+/* Called once the host has synced, which is the earliest point at which the
+ * GATT table has real handles. Resolves the Service Changed characteristic —
+ * doing it in gatt_svr_init() is too early and silently disables the whole
+ * MONOCLE_GATT_VERSION mechanism. */
+void gatt_svr_on_sync(void);
+
 /* The monocle service's UUID, so advertising can carry it and the app can
  * filter scans by it instead of listing every device in the room. */
 const ble_uuid128_t *gatt_svr_service_uuid(void);
@@ -76,6 +101,29 @@ const ble_uuid128_t *gatt_svr_service_uuid(void);
  * GATT layer needs the current connection to send notifications on. */
 void gatt_svr_on_connect(uint16_t conn_handle);
 void gatt_svr_on_disconnect(void);
+/* Sends one status event. Silently does nothing when nobody is subscribed,
+ * which is the normal case for most of a session. */
+void gatt_svr_notify_status(uint8_t event, const void *extra, uint8_t extra_len);
+
+/* Bytes of frame header before the ADPCM payload: seq, predictor, step index.
+ * See docs/protocol.md. */
+#define MONOCLE_VOICE_HEADER_LEN              5
+
+/* Sends one voice frame. `predictor` and `step_index` are the encoder state as
+ * it was *before* this frame's samples, which is what makes the frame
+ * decodable on its own. Drops the frame rather than blocking if nobody is
+ * subscribed or the stack is out of buffers. */
+void gatt_svr_notify_voice(uint16_t seq, int16_t predictor, uint8_t step_index,
+                           const uint8_t *payload, size_t payload_len);
+
+/* Whether anyone is listening for voice frames. The capture path checks this
+ * before encoding, since ADPCM for an empty room is wasted CPU. */
+bool gatt_svr_voice_is_subscribed(void);
+
+/* Whether a central is connected at all. Used to pick what the panel rests on
+ * once a voice session ends. */
+bool gatt_svr_is_connected(void);
+
 void gatt_svr_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
                            int cur_notify, int cur_indicate);
 

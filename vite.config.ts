@@ -10,6 +10,7 @@ export default defineConfig({
   // Tauri expects a fixed port, fail if that port is not available
   server: {
     strictPort: true,
+    host: "127.0.0.1",
   },
   plugins: [react(), tailwindcss()],
   resolve: {

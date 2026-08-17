@@ -2,8 +2,11 @@ pub mod ble;
 pub mod llama;
 pub mod manifest;
 pub mod models;
+pub mod recorder;
 pub mod monocle;
 pub mod socket;
+pub mod voice;
+pub mod whisper;
 
 #[cfg(test)]
 #[path = "../tests/helpers.rs"]
@@ -15,6 +18,8 @@ pub fn run() {
         .manage(models::Downloads::default())
         .manage(llama::LlamaState::default())
         .manage(ble::BleState::default())
+        .manage(whisper::WhisperState::default())
+        .manage(recorder::RecorderState::default())
         .invoke_handler(tauri::generate_handler![
             manifest::get_model_manifest,
             models::files::list_local_models,
@@ -36,14 +41,17 @@ pub fn run() {
             ble::ble_set_wifi_power,
             ble::ble_display_text,
             socket::socket_echo,
-            socket::socket_benchmark
+            socket::socket_benchmark,
+            recorder::start_recording,
+            recorder::stop_recording
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Never leave an orphaned llama-server holding gigabytes of RAM.
+            // Never leave an orphaned sidecar holding gigabytes of RAM.
             if let tauri::RunEvent::Exit = event {
                 llama::shutdown(app);
+                whisper::shutdown(app);
             }
         });
 }

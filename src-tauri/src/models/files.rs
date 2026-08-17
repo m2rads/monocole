@@ -18,12 +18,19 @@ pub struct LocalModel {
 }
 
 /// Model files are always addressed by bare file name inside models_dir.
+/// Model file names become paths inside the models dir, so this is a safety
+/// check before any of them is opened, written or deleted.
+///
+/// The extension allow-list is part of that: `.gguf` for chat models,
+/// `.bin` for whisper's GGML speech models. Anything else is either a mistake
+/// or an attempt to make the app write somewhere it should not.
 pub(crate) fn validate_file_name(file: &str) -> Result<(), String> {
+    let known_extension = file.ends_with(".gguf") || file.ends_with(".bin");
     if file.is_empty()
         || file.starts_with('.')
         || file.contains('/')
         || file.contains('\\')
-        || !file.ends_with(".gguf")
+        || !known_extension
     {
         return Err(format!("invalid model file name: {file}"));
     }
@@ -47,7 +54,13 @@ pub fn scan_models_dir(dir: &std::path::Path) -> Result<Vec<LocalModel>, String>
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".gguf") {
+        // Both model kinds live here: .gguf for chat, .bin for whisper's
+        // speech model. The UI is what separates them, by manifest kind — if
+        // this only listed .gguf, a downloaded speech model would be invisible
+        // and its card would offer to download it again forever.
+        let is_model = |n: &str| n.ends_with(".gguf") || n.ends_with(".bin");
+
+        if is_model(&name) {
             by_file.insert(
                 name.clone(),
                 LocalModel {
@@ -57,7 +70,7 @@ pub fn scan_models_dir(dir: &std::path::Path) -> Result<Vec<LocalModel>, String>
                 },
             );
         } else if let Some(final_name) = name.strip_suffix(".part") {
-            if final_name.ends_with(".gguf") && !by_file.contains_key(final_name) {
+            if is_model(final_name) && !by_file.contains_key(final_name) {
                 by_file.insert(
                     final_name.to_string(),
                     LocalModel {

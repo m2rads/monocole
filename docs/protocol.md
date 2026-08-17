@@ -65,9 +65,15 @@ ever wanted, it is additive on the same socket.
 ## Plane 1 — BLE control plane
 
 The desktop app is the **central**; the monocle is the **peripheral**. Device
-advertises as `minicole-monocle`. Once the service UUID is frozen, the app
-should filter scans by it (`ScanFilter` in `ble.rs`) instead of listing every
-nearby device.
+advertises as `minicole-monocle`, and the app filters scans by the service UUID
+(`ScanFilter` in `ble.rs`) rather than listing every nearby device.
+
+The **UUID rides in the advertisement and the name in the scan response**, not
+the other way round: a 128-bit UUID costs 18 of the 31 available bytes so the
+two do not both fit, and only the advertisement can be filtered on. An active
+scan asks for the scan response anyway, so the name still reaches the device
+list. The hardware test suite matches the same way — macOS caches a bonded
+peripheral's name and would otherwise keep reporting a stale one.
 
 One custom 128-bit service, `83486508-636c-4260-9119-c0ccc2004219`:
 
@@ -77,9 +83,14 @@ One custom 128-bit service, `83486508-636c-4260-9119-c0ccc2004219`:
 | wifi_state | `1ad1e743-…-68b4d695ac8b` | device → app | notify | **implemented** |
 | wifi_control | `e4782756-…-8c546a9134f1` | app → device | write (enc) | **implemented** |
 | display | `e474939e-…-4f365b6fe723` | app → device | write (enc) | **implemented** |
+| voice | `adea8e3b-…-cccf43c555af` | device → app | notify | **UUID frozen**, not built |
+| status | `d4f52189-…-00cc0dd7dd57` | device → app | notify | **UUID frozen**, not built |
 | control | *unassigned* | app → device | write | planned |
-| voice | *unassigned* | device → app | notify | planned |
-| status | *unassigned* | device → app | notify | planned |
+
+"UUID frozen, not built" means the identifier and payload below are settled and
+present in all three implementations, while the firmware that produces the data
+is milestone 3 work. They are written down first so that the app, the firmware
+and the test suite cannot each invent their own.
 
 Implemented UUIDs are frozen: they appear in the firmware's `gatt_svr.c` (as
 `BLE_UUID128_INIT`, byte-reversed) and in `src-tauri/src/ble.rs`. Change them
@@ -164,9 +175,13 @@ come the same way, which is why it is not called `tokens`.
 tokens will arrive a few at a time, and it costs one byte now instead of a
 protocol change later.
 
-One write is one message. An ATT write request carries `MTU - 3` bytes of
-value — 253 at the MTU of 256 macOS currently negotiates — and the op byte is
-one of them, so **252 bytes of text** is the limit. The firmware rejects
+One write is one message, and the limit is **252 bytes of text** — the
+firmware's buffer, not what the link can carry. An ATT write request holds
+`MTU - 3` bytes of value, so the negotiated MTU of 512 leaves room for 509; the
+252 dates from NimBLE's old default MTU of 256 and stayed put when the MTU was
+raised (see Link parameters), which leaves headroom rather than a bug. Raising
+it means changing `DISPLAY_TEXT_MAX` in the firmware's `display.h` and in
+`ble.rs` together. The firmware rejects
 anything longer rather than reassembling, and the app splits rather than
 truncating, since a cut in the middle of a UTF-8 character loses exactly what
 the wearer was meant to read. There is no acknowledgement beyond the ATT write
@@ -229,13 +244,70 @@ the detector or the capture path. Mitigation: bring capture up on its own and
 confirm recorded audio is audible **before** wiring the detector to it, so the
 two are never unproven at the same time.
 
-### Voice framing
+### voice payload
 
-`[seq: u16][adpcm payload]` — 16 kHz mono source, IMA ADPCM (4-bit/sample,
-~64 kbps). The sequence number detects drops; the app tolerates gaps rather
-than requesting retransmission, since stale audio is worthless.
+```
+[seq: u16 LE][predictor: i16 LE][step_index: u8][adpcm payload ...]
+```
 
-Exact frame size is tuned against the connection interval in milestone 3.
+16 kHz mono source, IMA ADPCM at 4 bits per sample, ~64 kbps. The payload is
+**256 bytes — 512 samples, 32 ms of audio** — making the frame 261 bytes on the
+wire.
+
+That size is chosen against the link rather than the codec. At the negotiated
+MTU of 512 a notification carries 509 bytes, so a frame is under half of one;
+at a 30 ms connection interval, one frame per interval keeps up with real time
+with room to spare for a retry or for Wi-Fi stealing airtime. Both figures are
+measured — see Link parameters.
+
+**Every frame's header snapshots the decoder state it starts from. The encoder
+does not reset — it runs continuously and simply records where each frame
+began.** IMA ADPCM normally carries its predictor and step index from one
+sample to the next, forever, which means a single lost notification does not
+cost you 32 ms of audio: it turns everything after it into noise. Five bytes
+per frame buys that back. The app tolerates gaps rather than asking for
+retransmission, since stale audio is worthless, so frames have to be
+individually decodable for that tolerance to mean anything.
+
+**The distinction between snapshotting and resetting is not pedantic.**
+Resetting the encoder per frame is also decodable, and was what this document
+specified first. But the predictor then starts from zero 31 times a second
+while the step table starts at 7, so the predictor has to climb back to the
+signal level at the top of every frame and the first dozen-odd samples of each
+are wrong. That is an audible buzz at the frame rate, not a rounding error.
+Snapshotting costs the same five bytes and has no such artefact.
+`test_adpcm.py::test_every_frame_after_the_first_is_clean` is the regression
+test; it fails if a future encoder resets.
+
+`seq` increments per frame within one utterance and restarts at zero on the
+next. A gap tells the app how much audio is missing; it inserts that much
+silence rather than discarding the utterance, because losing a sentence to one
+dropped packet is worse than a small hole in it.
+
+### status payload
+
+```
+[event: u8][extra ...]
+
+1 voice_started    no extra — the wake word fired, voice frames follow
+2 voice_ended      + 1 byte reason: 0 vad, 1 capped, 2 error
+3 panel_geometry   + 2 bytes: cols, rows
+```
+
+**The trigger stays off the wire.** What wakes the monocle — a wake word today,
+something else later — is internal to the firmware; only the event crosses.
+That is what lets the trigger change without the app knowing. See "What starts
+a voice session".
+
+`voice_ended` reasons distinguish a normal end (the VAD heard silence) from the
+hard cap on utterance length and from a capture failure, because the app should
+transcribe the first two and report the third.
+
+`panel_geometry` is not voice work. It answers the long-standing question of
+how the app learns the character grid instead of assuming it, and it costs one
+event in a characteristic being added anyway. Nothing needs it while wrapping
+and pagination both live in the firmware — it is here for whatever lays out
+text once the panel is not a 128×64 stand-in.
 
 ### Link parameters
 
@@ -402,7 +474,9 @@ payload format above:
 
 ## Open questions
 
-- Exact UUIDs — generate once, commit here and in firmware constants.
+- Exact UUIDs — the four implemented ones are frozen above; `control`, `voice`
+  and `status` still need generating, and committing here and in firmware
+  constants at the same time.
 - TCP port number, and whether the app should accept a device-chosen port from
   `wifi_state` (currently assumed yes) or pin a constant.
 - ADPCM frame size vs. connection-event packing — tune in milestone 3.

@@ -57,6 +57,7 @@ fn test_payload() -> Vec<u8> {
 // manifest's size_bytes instead of the response headers.
 fn entry_for(url: String) -> ModelEntry {
     ModelEntry {
+        kind: crate::manifest::ModelKind::Chat,
         id: "test-model".into(),
         name: "Test model".into(),
         description: "test".into(),

@@ -73,7 +73,10 @@ optionally a snapshot of what they're looking at goes along with the query.
 
 ## Throughput essentials
 
-- Negotiate MTU 517, request 2M PHY, short connection interval (~15 ms).
+- MTU 512, 2M PHY, and a 30 ms connection interval — all measured against
+  macOS rather than assumed, and 30 ms is the floor there. Ask for the PHY and
+  the interval separately, or they collide. See Link parameters in
+  [protocol.md](protocol.md).
 - Stream notifications from a dedicated FreeRTOS task fed by ring buffers off
   the I2S/camera DMA — never from callbacks.
 - Design BLE against a conservative ~200 kbps sustained budget. Voice uses
@@ -97,6 +100,11 @@ optionally a snapshot of what they're looking at goes along with the query.
 3. **Voice path** — mic → I2S DMA → ESP-SR front end → wake word → ADPCM → BLE
    notify → app writes a WAV to disk. Confirm sustained 64 kbps holds without
    drops (absorbs the old throughput test).
+
+   **Capture is done and verified audible** (2026-08-14) — `main/mic.c` plus
+   `test/capture_mic.py`; esp-sr and the `voice`/`status` characteristics are
+   in place. What remains is the AFE wiring, the detector, and the encoder.
+   See [voice-plan.md](voice-plan.md) for the phase breakdown.
 
    The trigger is **a stock WakeNet wake word from the start** ("Hi ESP" or
    "Alexa"), not a button: speaking is the product, and a button on a
