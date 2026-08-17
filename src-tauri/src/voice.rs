@@ -187,10 +187,44 @@ impl Utterance {
         (sum_squares / self.samples.len() as f64).sqrt() as f32
     }
 
-    /// Encodes the utterance as a 16-bit mono WAV.
+    /// Encodes the utterance as a 16-bit mono WAV, normalised.
     pub fn to_wav(&self) -> Vec<u8> {
-        wav_from_pcm(&self.samples, SAMPLE_RATE)
+        wav_from_pcm(&normalize(&self.samples), SAMPLE_RATE)
     }
+}
+
+/// Brings a quiet recording up to a level whisper works well at.
+///
+/// The monocle streams the raw microphone, which means no automatic gain — the
+/// front end's AGC is deliberately bypassed because it damages consonants. The
+/// cost is audio around a tenth of full scale, and whisper transcribes quiet
+/// speech noticeably worse than loud speech.
+///
+/// Scaling is capped, and skipped entirely below a floor. Amplifying a silent
+/// room to speech levels would turn its noise into something whisper feels
+/// obliged to interpret — and it invents text rather than returning nothing.
+fn normalize(samples: &[i16]) -> Vec<i16> {
+    /// Leaves headroom rather than touching full scale.
+    const TARGET_PEAK: f32 = 22_000.0;
+    /// Beyond this, we are amplifying a noise floor and nothing else.
+    const MAX_GAIN: f32 = 8.0;
+    /// Below this, there is no speech to bring up.
+    const SILENCE_PEAK: i16 = 200;
+
+    let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0) as i16;
+    if peak <= SILENCE_PEAK {
+        return samples.to_vec();
+    }
+
+    let gain = (TARGET_PEAK / peak as f32).min(MAX_GAIN);
+    if gain <= 1.0 {
+        return samples.to_vec();
+    }
+
+    samples
+        .iter()
+        .map(|s| (*s as f32 * gain).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+        .collect()
 }
 
 /// Wraps 16-bit mono PCM in a WAV container.

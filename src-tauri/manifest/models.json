@@ -51,15 +51,15 @@
     },
     {
       "kind": "stt",
-      "id": "whisper-base-en",
-      "name": "Whisper Base (English)",
-      "description": "Speech-to-text for the monocle's microphone. Downloaded automatically the first time you speak to it; not selectable for chat.",
+      "id": "whisper-small-en",
+      "name": "Whisper Small (English)",
+      "description": "Speech-to-text for the monocle and for dictation. Larger than Base and markedly more accurate on the compressed, small-microphone audio the monocle sends. Not selectable for chat.",
       "repo": "ggerganov/whisper.cpp",
-      "file": "ggml-base.en.bin",
-      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+      "file": "ggml-small.en.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
       "quant": "f16",
-      "sizeBytes": 147951465,
-      "minRamGb": 2,
+      "sizeBytes": 487614201,
+      "minRamGb": 4,
       "sha256": null
     }
   ]

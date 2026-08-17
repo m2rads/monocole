@@ -22,11 +22,16 @@ static const char *TAG = "monocle_voice";
 /*
  * How long the speaker has to stop before the utterance is considered over.
  *
- * Long enough to survive the pause in the middle of a sentence, short enough
- * that the reply does not feel delayed. AFE's own VAD reports per frame; this
- * is the run of silent frames we require on top of it.
+ * Generous on purpose: 800 ms was shorter than an ordinary mid-sentence pause,
+ * so thinking for a moment ended the recording and the second half of the
+ * question was lost.
+ *
+ * The cost is directly felt — this is dead air between finishing a sentence
+ * and the reply starting, because nothing downstream can begin until the
+ * utterance closes. 1500-2000 ms is the usual sweet spot if this feels
+ * sluggish; it is one number.
  */
-#define VOICE_END_SILENCE_MS    800
+#define VOICE_END_SILENCE_MS    5000
 
 /*
  * How long to wait for the speaker to begin, after the wake word.
@@ -40,7 +45,7 @@ static const char *TAG = "monocle_voice";
  * Generous, because the cost of waiting is a second of nothing while the cost
  * of being too strict is losing the sentence entirely.
  */
-#define VOICE_LEAD_IN_MS        4000
+#define VOICE_LEAD_IN_MS        5000
 
 /*
  * A hard ceiling on one utterance.
@@ -48,8 +53,11 @@ static const char *TAG = "monocle_voice";
  * The VAD is the normal way out. This exists because a noisy room can keep
  * VAD_SPEECH asserted indefinitely, and an utterance that never ends is one
  * that never gets transcribed — a stuck session is worse than a truncated one.
+ *
+ * 30 s because that is whisper's window: it processes audio in 30-second
+ * chunks, so an utterance longer than this gains nothing in one pass anyway.
  */
-#define VOICE_MAX_MS            15000
+#define VOICE_MAX_MS            30000
 
 /* AFE's tasks are the ones doing real work; these two only shuttle buffers. */
 #define VOICE_TASK_STACK        4096
@@ -86,11 +94,23 @@ static volatile bool s_listening;
 /* Set once at init: how many samples one feed() wants. */
 static int s_feed_samples;
 
-/* Streaming state, touched only by the fetch task. */
+/* Streaming state, touched only by the feed task — see voice_stream(). */
 static adpcm_state_t s_adpcm;
 static int16_t s_pcm[ADPCM_FRAME_SAMPLES];
 static int s_pcm_used;
 static uint16_t s_seq;
+
+/* Raised by the fetch task when an utterance begins, cleared by the feed task
+ * once it has restarted its encoder. A flag rather than a direct reset because
+ * the two run on different tasks and a half-written frame is not worth a
+ * mutex on the audio path. */
+static volatile bool s_stream_restart;
+
+/* One-pole DC blocker state, for the raw microphone path. */
+static int32_t s_dc_prev_in;
+static int32_t s_dc_prev_out;
+
+static void voice_stream(const int16_t *samples, int count);
 
 bool
 voice_is_listening(void)
@@ -125,15 +145,56 @@ voice_feed_task(void *arg)
             memset(buffer + got, 0, (s_feed_samples - got) * sizeof(int16_t));
         }
         s_afe->feed(s_afe_data, buffer);
+
+        /* The same samples go on the wire, unprocessed. Streaming from here
+         * rather than from the fetch task is what keeps AFE's noise
+         * suppression out of the audio whisper sees. */
+        if (s_listening) {
+            voice_stream(buffer, (int)got);
+        }
     }
 }
 
 /*
- * Encodes what the front end produced and puts it on the air.
+ * Removes the microphone's DC offset.
  *
- * Frames are a fixed 512 samples on the wire, but nothing guarantees a fetch
- * hands back exactly that many, so samples accumulate here and go out a full
- * frame at a time. The leftovers of one fetch start the next frame.
+ * The PDM mic sits on an offset of roughly 1400 counts. Left in, ADPCM spends
+ * its dynamic range tracking a constant instead of the speech on top of it,
+ * and the predictor takes the start of every utterance to climb there.
+ *
+ * A one-pole high pass: y[n] = x[n] - x[n-1] + 0.995 * y[n-1]. The 0.995 is
+ * 4079/4096 so the multiply stays integer.
+ */
+static int16_t
+dc_block(int16_t sample)
+{
+    int32_t out = sample - s_dc_prev_in + ((s_dc_prev_out * 4079) >> 12);
+    s_dc_prev_in = sample;
+    s_dc_prev_out = out;
+
+    if (out > 32767) {
+        return 32767;
+    }
+    if (out < -32768) {
+        return -32768;
+    }
+    return (int16_t)out;
+}
+
+/*
+ * Encodes microphone audio and puts it on the air.
+ *
+ * **Deliberately the raw microphone, not AFE's output.** The front end applies
+ * noise suppression and gain tuned for waking on a keyword, and suppression
+ * works by attenuating noise-like content — which is exactly what consonants
+ * are. Measured on real utterances, everything above 3 kHz was all but gone,
+ * so vowels survived and `s`, `f`, `t` and `sh` did not. Whisper does its own
+ * noise handling and would rather have the unprocessed signal. AFE still runs;
+ * it just decides *when* to listen rather than *what* gets sent.
+ *
+ * Frames are a fixed 512 samples on the wire, but a mic read need not hand
+ * back exactly that many, so samples accumulate here and go out a full frame
+ * at a time. The leftovers of one read start the next frame.
  *
  * Encoder state runs continuously across the utterance; each frame's header
  * records where it started, taken *before* encoding. That is what makes a
@@ -149,8 +210,17 @@ voice_stream(const int16_t *samples, int count)
         return;
     }
 
+    if (s_stream_restart) {
+        /* A new utterance: restart the numbering and the codec so the app can
+         * tell one from the next without being told where the boundary is. */
+        s_stream_restart = false;
+        s_seq = 0;
+        s_pcm_used = 0;
+        adpcm_reset(&s_adpcm);
+    }
+
     for (int i = 0; i < count; i++) {
-        s_pcm[s_pcm_used++] = samples[i];
+        s_pcm[s_pcm_used++] = dc_block(samples[i]);
         if (s_pcm_used < ADPCM_FRAME_SAMPLES) {
             continue;
         }
@@ -171,11 +241,9 @@ voice_start_utterance(const afe_fetch_result_t *result)
 {
     s_listening = true;
 
-    /* A fresh utterance starts the numbering and the codec over, so the app
-     * can tell one from the next without being told where the boundary is. */
-    s_seq = 0;
-    s_pcm_used = 0;
-    adpcm_reset(&s_adpcm);
+    /* The feed task owns the encoder, so ask it to restart rather than
+     * reaching into its state from here. */
+    s_stream_restart = true;
 
     /* wakenet_model_index says *which wake word* fired, which is the number
      * that matters when one of them is triggering on ordinary speech;
@@ -251,9 +319,6 @@ voice_fetch_task(void *arg)
             }
             continue;
         }
-
-        voice_stream(result->data,
-                     result->data_size / (int)sizeof(int16_t));
 
         elapsed_ms += frame_ms;
 

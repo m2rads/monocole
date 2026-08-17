@@ -162,16 +162,12 @@ mod cross_implementation {
 
     #[test]
     fn decodes_what_the_python_encoder_produced() {
-        let mut utterance = Utterance::new();
-        for chunk in SINE_440.chunks(FRAME_LEN) {
-            utterance.push(decode_frame(chunk).unwrap());
-        }
-        assert_eq!(utterance.dropped(), 0);
-
-        let wav = utterance.to_wav();
-        let decoded: Vec<i16> = wav[44..]
-            .chunks(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        // Straight from the decoder rather than through to_wav(), which
+        // normalises: gain would show up here as codec error and mask what
+        // this test is actually asking about.
+        let decoded: Vec<i16> = SINE_440
+            .chunks(FRAME_LEN)
+            .flat_map(|chunk| decode_frame(chunk).unwrap().samples)
             .collect();
 
         assert_eq!(decoded.len(), 2 * FRAME_SAMPLES);
@@ -206,6 +202,55 @@ mod cross_implementation {
         let alone = decode_frame(&SINE_440[FRAME_LEN..]).unwrap().samples;
 
         assert_eq!(alone, in_sequence[FRAME_SAMPLES..]);
+    }
+}
+
+mod normalisation {
+    use super::*;
+
+    #[test]
+    fn quiet_speech_is_brought_up() {
+        let quiet: Vec<i16> = (0..1000)
+            .map(|i| if i % 2 == 0 { 2000 } else { -2000 })
+            .collect();
+        let loud = normalize(&quiet);
+        let peak = loud.iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(
+            (16_000..=22_000).contains(&peak),
+            "expected ~22000 after gain, got {peak}"
+        );
+    }
+
+    #[test]
+    fn a_silent_room_is_left_alone() {
+        // The important one: amplifying noise to speech levels makes whisper
+        // invent words rather than return nothing.
+        let noise: Vec<i16> = (0..1000)
+            .map(|i| if i % 3 == 0 { 40 } else { -30 })
+            .collect();
+        assert_eq!(normalize(&noise), noise);
+    }
+
+    #[test]
+    fn already_loud_audio_is_untouched() {
+        let loud: Vec<i16> = (0..1000)
+            .map(|i| if i % 2 == 0 { 30_000 } else { -30_000 })
+            .collect();
+        assert_eq!(normalize(&loud), loud);
+    }
+
+    #[test]
+    fn gain_is_capped() {
+        // Very quiet but above the floor: gain stops at 8x rather than
+        // dragging a whisper-quiet room up to full scale.
+        let faint: Vec<i16> = (0..100).map(|i| if i % 2 == 0 { 300 } else { -300 }).collect();
+        let peak = normalize(&faint).iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert_eq!(peak, 2400, "300 * 8");
+    }
+
+    #[test]
+    fn nothing_at_all_does_not_panic() {
+        assert!(normalize(&[]).is_empty());
     }
 }
 
