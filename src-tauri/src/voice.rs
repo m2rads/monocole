@@ -289,6 +289,58 @@ pub struct VoiceEvent {
     pub message: Option<String>,
 }
 
+/// Set `TROUBLESHOOT_VOICE_RECORDING=true` in `.env` to keep a copy of every
+/// utterance sent to whisper.
+///
+/// Off unless asked for. When a transcript comes back wrong the only way to
+/// tell bad audio from bad transcription is to listen to it — but that is a
+/// debugging session, not something to spend the user's disk on by default.
+const TROUBLESHOOT_VAR: &str = "TROUBLESHOOT_VOICE_RECORDING";
+
+/// Whether the flag is on. Anything other than a clear yes is a no.
+fn troubleshooting() -> bool {
+    std::env::var(TROUBLESHOOT_VAR)
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Where saved utterances go: `utterances/` beside the models, in the app's
+/// own data directory.
+///
+/// Somewhere the user can actually reach, deliberately. An earlier version
+/// wrote to the system temp directory, which quietly accumulated megabytes in
+/// a path macOS will not let Finder open.
+pub fn utterance_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(crate::models::app_data_dir(app)?.join("utterances"))
+}
+
+/// Writes the WAV out, if troubleshooting is switched on.
+fn save_for_inspection(app: &tauri::AppHandle, wav: &[u8]) {
+    if !troubleshooting() {
+        return;
+    }
+
+    let Ok(dir) = utterance_dir(app) else {
+        return;
+    };
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        eprintln!("voice: cannot write to {}: {err}", dir.display());
+        return;
+    }
+
+    let path = dir.join(format!(
+        "utterance-{}.wav",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    ));
+    match std::fs::write(&path, wav) {
+        Ok(()) => println!("voice: wrote {}", path.display()),
+        Err(err) => eprintln!("voice: could not save the utterance: {err}"),
+    }
+}
+
 fn emit(app: &tauri::AppHandle, kind: &'static str, text: Option<String>, message: Option<String>) {
     use tauri::Emitter;
     let _ = app.emit(
@@ -415,24 +467,7 @@ impl Session {
 
         let wav = utterance.to_wav();
 
-        // Debug builds keep a copy of exactly what whisper was given. When a
-        // transcript comes back empty or wrong, the only way to tell a bad
-        // recording from a bad transcription is to listen to the audio — and
-        // it is otherwise never written down anywhere.
-        #[cfg(debug_assertions)]
-        {
-            let path = std::env::temp_dir().join(format!(
-                "minicole-utterance-{}.wav",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-            ));
-            match std::fs::write(&path, &wav) {
-                Ok(()) => println!("voice: wrote {} for inspection", path.display()),
-                Err(err) => eprintln!("voice: could not save the utterance: {err}"),
-            }
-        }
+        save_for_inspection(app, &wav);
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             match crate::whisper::transcribe(&app, wav).await {

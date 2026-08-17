@@ -13,6 +13,10 @@ pub mod whisper;
 mod test_helpers;
 
 pub fn run() {
+    // Load .env if there is one. Absent is the normal case — it carries
+    // troubleshooting switches, not configuration the app needs to work.
+    let _ = dotenvy::dotenv();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(models::Downloads::default())
